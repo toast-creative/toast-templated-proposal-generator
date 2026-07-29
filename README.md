@@ -66,6 +66,12 @@ Lesson 1; **Lesson 2 (durable execution) adds a Postgres database** — grab a f
 ```
 OPENAI_API_KEY=sk-...
 DATABASE_URL=postgresql://user:password@host/db?sslmode=require   # Lesson 2+
+PORT=8787
+
+# Templated integration
+TEMPLATED_API_KEY=
+TEMPLATED_MAIN_TEMPLATE_ID=c27db04d-356e-4745-a2dd-e7226f4debdd
+TEMPLATED_API_BASE_URL=https://api.templated.io/v1
 ```
 
 ### 3. Run things

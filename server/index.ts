@@ -19,7 +19,10 @@ async function main() {
   // Point DBOS at the same Postgres for its checkpoint store, then launch it.
   // launch() ALSO recovers any workflows that were mid-flight when the process
   // last died, resuming each from its last completed step.
-  DBOS.setConfig({ name: "harness", systemDatabaseUrl: process.env.DATABASE_URL });
+  DBOS.setConfig({
+    name: "harness",
+    systemDatabaseUrl: process.env.DATABASE_URL,
+  });
   await DBOS.launch();
 
   const app = express();
@@ -72,8 +75,16 @@ async function main() {
       if (message.type === "submit_task") {
         // Pick the runtime: the single-agent loop, or the supervisor.
         const workflow =
-          message.mode === "supervised" ? runSupervisorWorkflow : runAgentWorkflow;
+          message.mode === "supervised"
+            ? runSupervisorWorkflow
+            : runAgentWorkflow;
         await DBOS.startWorkflow(workflow)(message.input);
+      } else if (message.type === "continue_task") {
+        await DBOS.send(
+          message.workflowId,
+          { input: message.input },
+          "user_input",
+        );
       }
     });
 
@@ -82,7 +93,9 @@ async function main() {
   });
 
   server.listen(PORT, () => {
-    console.log(`harness server listening on http://localhost:${PORT}  (ws: /ws)`);
+    console.log(
+      `harness server listening on http://localhost:${PORT}  (ws: /ws)`,
+    );
   });
 }
 

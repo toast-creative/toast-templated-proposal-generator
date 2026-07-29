@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { runInSandbox, type SandboxApi } from "./sandbox";
+import { createTemplateForUser } from "../scripts/create-template";
 
 // ── Canned data the read tools serve ────────────────────────────────────────
 
@@ -9,9 +10,24 @@ type Charge = { id: string; amount: number; date: string; description: string };
 // Note the planted duplicate: ch_001 and ch_002 are the same charge.
 export const CHARGES: Record<string, Charge[]> = {
   cus_88121: [
-    { id: "ch_001", amount: 4900, date: "2026-05-01", description: "Pro plan — monthly" },
-    { id: "ch_002", amount: 4900, date: "2026-05-01", description: "Pro plan — monthly" },
-    { id: "ch_003", amount: 1500, date: "2026-04-18", description: "Extra seats" },
+    {
+      id: "ch_001",
+      amount: 4900,
+      date: "2026-05-01",
+      description: "Pro plan — monthly",
+    },
+    {
+      id: "ch_002",
+      amount: 4900,
+      date: "2026-05-01",
+      description: "Pro plan — monthly",
+    },
+    {
+      id: "ch_003",
+      amount: 1500,
+      date: "2026-04-18",
+      description: "Extra seats",
+    },
   ],
 };
 
@@ -72,13 +88,24 @@ export const tools = {
     inputSchema: z.object({ itemId: z.string(), message: z.string() }),
   }),
   sendReply: tool({
-    description: "Send the drafted reply to the customer. This really emails them.",
+    description:
+      "Send the drafted reply to the customer. This really emails them.",
     inputSchema: z.object({ itemId: z.string(), draftId: z.string() }),
+  }),
+
+  createTemplateForUser: tool({
+    description:
+      "Create a new Templated folder and duplicate the main template into it for a specific client. Ask the user for the template name if one was not provided, and only call this tool after you have a templateName.",
+    inputSchema: z.object({
+      username: z.string(),
+      templateName: z.string().min(1),
+    }),
   }),
 
   // Privileged: only the billing specialist gets this. Moves real money.
   issueRefund: tool({
-    description: "Issue a refund to the customer. IRREVERSIBLE — this moves real money.",
+    description:
+      "Issue a refund to the customer. IRREVERSIBLE — this moves real money.",
     inputSchema: z.object({
       customerId: z.string(),
       chargeId: z.string(),
@@ -116,6 +143,13 @@ export async function runTool(
       return { ok: true, draftId: `draft-${args.itemId}` };
     case "sendReply":
       return { sent: true, itemId: args.itemId, draftId: args.draftId };
+    case "createTemplateForUser":
+      return (await createTemplateForUser(
+        String(args.username ?? ""),
+        typeof args.templateName === "string" && args.templateName.trim()
+          ? args.templateName.trim()
+          : undefined,
+      )) as unknown as Record<string, unknown>;
     case "issueRefund":
       return {
         refunded: true,

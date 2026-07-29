@@ -16,13 +16,31 @@ import {
 
 const MAX_STEPS = 30;
 
-// Tools that require a human's go-ahead before they run. (Just the irreversible
-// one for now — the billing agent's refund.)
-const NEEDS_APPROVAL = new Set(["issueRefund"]);
+// Tools that require a human's go-ahead before they run.
+const NEEDS_APPROVAL = new Set(["issueRefund", "createTemplateForUser"]);
 const APPROVAL_TIMEOUT_S = 86_400; // up to a day — a human approval is an unbounded wait
 
-type ToolCall = { toolCallId: string; toolName: string; input: Record<string, unknown> };
-type Turn = { text: string; toolCalls: ToolCall[]; responseMessages: ModelMessage[] };
+type ToolCall = {
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+};
+type Turn = {
+  text: string;
+  toolCalls: ToolCall[];
+  responseMessages: ModelMessage[];
+};
+
+function looksLikeClarification(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  return (
+    /[?]/.test(normalized) ||
+    /\b(please|could you|can you|what would|which|who|when|where|would you|do you)\b/i.test(
+      normalized,
+    )
+  );
+}
 
 // One model turn over the hydrated context, using the CURRENT agent's tools.
 async function modelTurn(
@@ -51,7 +69,10 @@ async function modelTurn(
 }
 
 // Execute one tool. Run as a DBOS step so its side effect runs exactly once.
-async function toolStep(workflowId: string, call: ToolCall): Promise<Record<string, unknown>> {
+async function toolStep(
+  workflowId: string,
+  call: ToolCall,
+): Promise<Record<string, unknown>> {
   await emit({
     type: EventType.ToolRequested,
     workflowId,
@@ -73,7 +94,12 @@ function toolResultMessage(call: ToolCall, value: JSONValue): ModelMessage {
   return {
     role: "tool",
     content: [
-      { type: "tool-result", toolCallId: call.toolCallId, toolName: call.toolName, output: { type: "json", value } },
+      {
+        type: "tool-result",
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        output: { type: "json", value },
+      },
     ],
   };
 }
@@ -103,12 +129,17 @@ async function agentWorkflow(input: string): Promise<string> {
     // 1. Compact old turns once the window is over budget.
     if (estimateTokens(turns.flat()) > MAX_CONTEXT_TOKENS) {
       const old: ModelMessage[][] = [];
-      while (turns.length > 1 && estimateTokens(turns.flat()) > KEEP_CONTEXT_TOKENS) {
+      while (
+        turns.length > 1 &&
+        estimateTokens(turns.flat()) > KEEP_CONTEXT_TOKENS
+      ) {
         const oldest = turns.shift();
         if (oldest) old.push(oldest);
       }
       if (old.length > 0) {
-        summary = await DBOS.runStep(() => summarize(old, summary), { name: `summarize-${step}` });
+        summary = await DBOS.runStep(() => summarize(old, summary), {
+          name: `summarize-${step}`,
+        });
         const contextTokens = estimateTokens(
           buildContext(currentAgent.systemPrompt, input, summary, turns),
         );
@@ -127,20 +158,48 @@ async function agentWorkflow(input: string): Promise<string> {
     }
 
     // 2 + 3. Hydrate the CURRENT agent's context and run one turn over it.
-    const context = buildContext(currentAgent.systemPrompt, input, summary, turns);
-    const turn = await DBOS.runStep(() => modelTurn(workflowId, context, currentAgent.tools), {
-      name: `model-${step}`,
-    });
+    const context = buildContext(
+      currentAgent.systemPrompt,
+      input,
+      summary,
+      turns,
+    );
+    const turn = await DBOS.runStep(
+      () => modelTurn(workflowId, context, currentAgent.tools),
+      {
+        name: `model-${step}`,
+      },
+    );
 
     const turnMessages: ModelMessage[] = [...turn.responseMessages];
 
     if (turn.toolCalls.length === 0) {
       await DBOS.runStep(
-        () => emit({ type: EventType.ModelCompleted, workflowId, text: turn.text }),
+        () =>
+          emit({ type: EventType.ModelCompleted, workflowId, text: turn.text }),
         { name: `model-done-${step}` },
       );
+
+      if (looksLikeClarification(turn.text)) {
+        turns.push(turnMessages);
+        const followup = await DBOS.recv<{ input: string }>(
+          "user_input",
+          APPROVAL_TIMEOUT_S,
+        );
+        if (followup) {
+          turns.push([{ role: "user", content: followup.input }]);
+          step++;
+          continue;
+        }
+      }
+
       await DBOS.runStep(
-        () => emit({ type: EventType.WorkflowCompleted, workflowId, output: turn.text }),
+        () =>
+          emit({
+            type: EventType.WorkflowCompleted,
+            workflowId,
+            output: turn.text,
+          }),
         { name: "completed" },
       );
       return turn.text;
@@ -153,7 +212,14 @@ async function agentWorkflow(input: string): Promise<string> {
         const reason = String(call.input.reason ?? "");
         const from = currentAgent.name;
         await DBOS.runStep(
-          () => emit({ type: EventType.AgentHandoff, workflowId, from, to, reason }),
+          () =>
+            emit({
+              type: EventType.AgentHandoff,
+              workflowId,
+              from,
+              to,
+              reason,
+            }),
           { name: `handoff-${call.toolCallId}` },
         );
         currentAgent = agents[to] ?? currentAgent;
@@ -179,12 +245,20 @@ async function agentWorkflow(input: string): Promise<string> {
           { name: `approval-req-${call.toolCallId}` },
         );
 
-        const decision = await DBOS.recv<{ approved: boolean }>("approval", APPROVAL_TIMEOUT_S);
+        const decision = await DBOS.recv<{ approved: boolean }>(
+          "approval",
+          APPROVAL_TIMEOUT_S,
+        );
         const approved = decision?.approved ?? false;
 
         await DBOS.runStep(
           () =>
-            emit({ type: EventType.ApprovalResolved, workflowId, toolCallId: call.toolCallId, approved }),
+            emit({
+              type: EventType.ApprovalResolved,
+              workflowId,
+              toolCallId: call.toolCallId,
+              approved,
+            }),
           { name: `approval-res-${call.toolCallId}` },
         );
 

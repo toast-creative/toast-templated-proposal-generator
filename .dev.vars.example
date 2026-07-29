@@ -1,10 +1,8 @@
-# Copy to .dev.vars and fill in. The server loads these via dotenv.
-#
-# OPENAI_API_KEY  — required from Lesson 1.
-# DATABASE_URL    — required from Lesson 2 (durable execution). Use a free
-#                   Postgres database, e.g. an instant one from neon.new.
-#                   Use the DIRECT connection string (not the -pooler host):
-#                   DBOS needs session features that PgBouncer poolers break.
-
-OPENAI_API_KEY=sk-...
+# DBOS  and LLM 
+ANTHROPIC_API_KEY=sk-...
 DATABASE_URL=postgresql://user:password@host/db?sslmode=require
+
+# Templated integration
+TEMPLATED_API_KEY=
+TEMPLATED_MAIN_TEMPLATE_ID=c27db04d-356e-4745-a2dd-e7226f4debdd
+TEMPLATED_API_BASE_URL=https://api.templated.io/v1

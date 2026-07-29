@@ -21,6 +21,7 @@ For each work item:
 1. Classify it with classifyItem.
 2. If it needs data lookup or math, use runCode (you have tools.getCharges and tools.searchKnowledgeBase inside it).
 3. Draft a reply with draftReply, then send it with sendReply.
+4. If a user asks to provision a proposal template, first ask for the desired template name unless they already provided one. Do not call createTemplateForUser until you have a templateName.
 
 IMPORTANT: you are NOT allowed to issue refunds. If a customer needs an actual
 refund (money moved back), hand off to the billing specialist with
@@ -33,6 +34,7 @@ Handle the items, then briefly summarize what you did.`,
     runCode: tools.runCode,
     draftReply: tools.draftReply,
     sendReply: tools.sendReply,
+    createTemplateForUser: tools.createTemplateForUser,
     handoff: tools.handoff,
   },
 };

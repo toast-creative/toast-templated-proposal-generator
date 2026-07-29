@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { EventType, type AgentEvent, type ClientMessage } from "@shared/events";
 import {
   ChatContainerContent,
@@ -60,7 +60,10 @@ type Turn =
     }
   | { id: string; role: "log"; level: string; text: string };
 
-function toTranscript(events: AgentEvent[]): { turns: Turn[]; running: boolean } {
+function toTranscript(events: AgentEvent[]): {
+  turns: Turn[];
+  running: boolean;
+} {
   const turns: Turn[] = [];
   let assistant: Extract<Turn, { role: "assistant" }> | null = null;
   let supervision: Extract<Turn, { role: "supervision" }> | null = null;
@@ -68,7 +71,8 @@ function toTranscript(events: AgentEvent[]): { turns: Turn[]; running: boolean }
   const approvalsById = new Map<string, Extract<Turn, { role: "approval" }>>();
   let open = 0;
 
-  const sub = (stepId: string) => supervision?.subagents.find((s) => s.stepId === stepId);
+  const sub = (stepId: string) =>
+    supervision?.subagents.find((s) => s.stepId === stepId);
 
   for (const ev of events) {
     switch (ev.type) {
@@ -123,12 +127,23 @@ function toTranscript(events: AgentEvent[]): { turns: Turn[]; running: boolean }
       }
       case EventType.ToolFailed: {
         const turn = toolsById.get(ev.toolCallId);
-        if (turn) turn.part = { ...turn.part, state: "output-error", errorText: ev.error };
+        if (turn)
+          turn.part = {
+            ...turn.part,
+            state: "output-error",
+            errorText: ev.error,
+          };
         break;
       }
       case EventType.AgentHandoff:
         assistant = null;
-        turns.push({ id: ev.id, role: "handoff", from: ev.from, to: ev.to, reason: ev.reason });
+        turns.push({
+          id: ev.id,
+          role: "handoff",
+          from: ev.from,
+          to: ev.to,
+          reason: ev.reason,
+        });
         break;
       case EventType.PlanCreated:
         assistant = null;
@@ -186,7 +201,12 @@ function toTranscript(events: AgentEvent[]): { turns: Turn[]; running: boolean }
         break;
       }
       case EventType.Log:
-        turns.push({ id: ev.id, role: "log", level: ev.level, text: ev.message });
+        turns.push({
+          id: ev.id,
+          role: "log",
+          level: ev.level,
+          text: ev.message,
+        });
         break;
     }
   }
@@ -203,18 +223,53 @@ export function TaskPane({
 }) {
   const [input, setInput] = useState("");
   const [supervised, setSupervised] = useState(false);
+  const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
   const { turns, running } = toTranscript(events);
+
+  useEffect(() => {
+    let currentWorkflowId: string | null = null;
+    for (const event of events) {
+      if (event.type === EventType.WorkflowStarted) {
+        currentWorkflowId = event.workflowId;
+      } else if (
+        event.type === EventType.WorkflowCompleted ||
+        event.type === EventType.WorkflowFailed
+      ) {
+        if (currentWorkflowId === event.workflowId) {
+          currentWorkflowId = null;
+        }
+      }
+    }
+    setActiveWorkflowId(currentWorkflowId);
+  }, [events]);
 
   function submit() {
     const text = input.trim();
     if (!text) return;
-    send({ type: "submit_task", input: text, mode: supervised ? "supervised" : "default" });
+
+    if (activeWorkflowId && running) {
+      send({
+        type: "continue_task",
+        workflowId: activeWorkflowId,
+        input: text,
+        mode: supervised ? "supervised" : "default",
+      });
+    } else {
+      send({
+        type: "submit_task",
+        input: text,
+        mode: supervised ? "supervised" : "default",
+      });
+    }
+
     setInput("");
   }
 
   async function clearMemory() {
     // The route is wired up in the memory lesson; degrade gracefully before then.
-    await fetch(`http://${location.hostname}:8787/api/clear`, { method: "POST" }).catch(() => {});
+    await fetch(`http://${location.hostname}:8787/api/clear`, {
+      method: "POST",
+    }).catch(() => {});
     location.reload(); // simplest reset: reconnect and replay the now-empty log
   }
 
@@ -235,7 +290,9 @@ export function TaskPane({
       <ChatContainerRoot className="min-h-0 flex-1">
         <ChatContainerContent className="space-y-5 px-4 py-5">
           {turns.length === 0 && (
-            <p className="text-muted-foreground text-sm">Give the agent an objective to begin.</p>
+            <p className="text-muted-foreground text-sm">
+              Give the agent an objective to begin.
+            </p>
           )}
           {turns.map((turn) => (
             <TurnView key={turn.id} turn={turn} />
@@ -249,7 +306,12 @@ export function TaskPane({
       </ChatContainerRoot>
 
       <div className="border-t p-3">
-        <PromptInput value={input} onValueChange={setInput} onSubmit={submit} isLoading={running}>
+        <PromptInput
+          value={input}
+          onValueChange={setInput}
+          onSubmit={submit}
+          isLoading={running}
+        >
           <PromptInputTextarea
             className="dark:bg-transparent"
             placeholder="Give the agent an objective…"
@@ -302,7 +364,9 @@ function ApprovalCard({ turn }: { turn: Extract<Turn, { role: "approval" }> }) {
     <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
       <div className="mb-1.5 flex items-center gap-2 text-sm font-medium">
         <ShieldAlert className="size-4 text-amber-500" /> Approval required
-        <span className="text-muted-foreground font-mono text-xs">{turn.action}</span>
+        <span className="text-muted-foreground font-mono text-xs">
+          {turn.action}
+        </span>
       </div>
       <p className="text-muted-foreground mb-3 text-sm">{summary}</p>
       {turn.state === "pending" ? (
@@ -366,24 +430,32 @@ function TurnView({ turn }: { turn: Turn }) {
       return (
         <div className="space-y-2">
           <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-            <Network className="size-3.5" /> Supervisor · {turn.subagents.length} investigators
+            <Network className="size-3.5" /> Supervisor ·{" "}
+            {turn.subagents.length} investigators
           </div>
           <ChainOfThought>
             {turn.subagents.map((s) => (
               <ChainOfThoughtStep key={s.stepId} defaultOpen>
                 <ChainOfThoughtTrigger leftIcon={subagentIcon(s.state)}>
                   <span className="font-medium capitalize">{s.agent}</span>
-                  <span className="text-muted-foreground"> · {SUBAGENT_LABEL[s.state]}</span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · {SUBAGENT_LABEL[s.state]}
+                  </span>
                 </ChainOfThoughtTrigger>
                 <ChainOfThoughtContent>
-                  <ChainOfThoughtItem className="italic">{s.objective}</ChainOfThoughtItem>
+                  <ChainOfThoughtItem className="italic">
+                    {s.objective}
+                  </ChainOfThoughtItem>
                   {s.state === "completed" && s.findings && (
                     <ChainOfThoughtItem className="text-foreground">
                       <Markdown className={PROSE}>{s.findings}</Markdown>
                     </ChainOfThoughtItem>
                   )}
                   {s.state === "failed" && (
-                    <ChainOfThoughtItem className="text-destructive">{s.findings}</ChainOfThoughtItem>
+                    <ChainOfThoughtItem className="text-destructive">
+                      {s.findings}
+                    </ChainOfThoughtItem>
                   )}
                 </ChainOfThoughtContent>
               </ChainOfThoughtStep>
