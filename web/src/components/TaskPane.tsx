@@ -96,30 +96,44 @@ function getActivity(
 
   const pendingTools = new Map<string, string>();
   const pendingApprovals = new Set<string>();
-  let lastModelCompletedText = "";
+  let awaitingInput = false;
   let sawModelDelta = false;
 
   for (const event of workflowEvents) {
     switch (event.type) {
       case EventType.ToolRequested:
         pendingTools.set(event.toolCallId, event.name);
+        awaitingInput = false;
         break;
       case EventType.ToolCompleted:
       case EventType.ToolFailed:
         pendingTools.delete(event.toolCallId);
+        awaitingInput = false;
         break;
       case EventType.ApprovalRequested:
         pendingApprovals.add(event.toolCallId);
+        awaitingInput = false;
         break;
       case EventType.ApprovalResolved:
         pendingApprovals.delete(event.toolCallId);
+        awaitingInput = false;
         break;
       case EventType.ModelDelta:
         sawModelDelta = true;
+        awaitingInput = false;
         break;
       case EventType.ModelCompleted:
-        lastModelCompletedText = event.text;
+        awaitingInput = looksLikeClarification(event.text);
         sawModelDelta = false;
+        break;
+      case EventType.WorkflowCompleted:
+      case EventType.WorkflowFailed:
+      case EventType.PlanCreated:
+      case EventType.SubagentStarted:
+      case EventType.SubagentCompleted:
+      case EventType.SubagentFailed:
+      case EventType.Log:
+        awaitingInput = false;
         break;
     }
   }
@@ -133,7 +147,7 @@ function getActivity(
     return { state: "running_tool", toolName };
   }
 
-  if (looksLikeClarification(lastModelCompletedText)) {
+  if (awaitingInput) {
     return { state: "awaiting_input" };
   }
 

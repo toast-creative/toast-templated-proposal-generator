@@ -55,8 +55,17 @@ interface ClientSelectionOptions extends PopulateTemplateOptions {
 interface ProposalLayerPayload {
   pages: Array<{
     page: string;
-    layers: Record<string, Record<string, string | number>>;
+    layers: Record<string, Record<string, unknown>>;
   }>;
+}
+
+interface TemplatedPageSnapshot {
+  page: string;
+  hide?: unknown;
+  width?: number;
+  height?: number;
+  layers?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 interface ProposalTemplateResult extends WorkflowResult {
@@ -93,9 +102,18 @@ interface MetadataProject {
   name?: string;
   client?: string | null;
   category?: string;
+  tagline?: string;
+  thumbnail?: string;
+  images?: MetadataImage[];
   sectors?: string[];
   services?: string[];
   description?: string;
+}
+
+interface MetadataImage {
+  url?: string;
+  width?: number | null;
+  height?: number | null;
 }
 
 interface MetadataPayload {
@@ -114,6 +132,39 @@ interface SeedProfile {
   services: string[];
 }
 
+interface StoryClientEntry extends ProposalClientEntry {
+  tagline: string;
+  services: string[];
+  thumbnailUrl: string | null;
+  usableImages: Array<{
+    url: string;
+    width: number;
+    height: number;
+  }>;
+}
+
+interface StoryPagePopulateOptions extends ClientSelectionOptions {
+  maxCompanies?: number;
+}
+
+export interface StoryPagePopulateResult {
+  templateId: string;
+  selectedClients: Array<{
+    slug: string;
+    name: string;
+    tagline: string;
+    services: string[];
+  }>;
+  storiesCreated: number;
+  pagesCreated: number;
+  generatedPages: string[];
+  descriptionPages: string[];
+  masonryPages: string[];
+  fullPages: string[];
+  summary: string;
+  editableUrl: string;
+}
+
 const CLIENTS_PER_PAGE = 32;
 const CLIENTS_PER_COLUMN = 16;
 const LOGO_GRID_COLUMNS = 4;
@@ -123,6 +174,34 @@ const LOGO_WIDTH = 152;
 const LOGO_HEIGHT = 81;
 const TEMPLATED_REQUEST_TIMEOUT_MS = 45_000;
 const MAX_DISPLAY_NAME_LENGTH = 35;
+const STORY_COMPANIES_COUNT = 6;
+// Masonry/full image frame sizes are no longer hardcoded: each blueprint's image
+// slots (name + width/height) are read straight from its snapshot via
+// deriveImageSlots(). This keeps the workflow correct through layer renames and
+// per-frame resizes in the master (masonry-a = 4 slots, masonry-b = 6 slots).
+const STORY_DESCRIPTION_LOGO_WIDTH = 936;
+const STORY_DESCRIPTION_LOGO_HEIGHT = 854;
+const STORY_DESCRIPTION_BLUEPRINT_CANDIDATES = [
+  "clients-story-description",
+  "clients-story-description-01",
+];
+const STORY_MASONRY_A_BLUEPRINT_CANDIDATES = [
+  "clients-story-masonry-a",
+  "clients-story-masonry-01",
+  "clients-story-masonry",
+];
+const STORY_FULL_BLUEPRINT_CANDIDATES = [
+  "clients-story-full",
+  "clients-story-full-01",
+];
+const STORY_MASONRY_B_BLUEPRINT_CANDIDATES = [
+  // NOTE: the master template ships this page with a typo ("mansonry"), so the
+  // real page name must come first or the masonry-b layout is never used.
+  "clients-story-mansonry-b",
+  "clients-story-masonry-b",
+  "clients-story-mansonry-03",
+  "clients-story-masonry-03",
+];
 
 const CURRENT_FILE_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(CURRENT_FILE_PATH), "..");
@@ -468,6 +547,103 @@ function similarityBoost(
   return score;
 }
 
+function slugifyPageSuffix(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+function isLikelyImageUrl(url: string): boolean {
+  return /\.(png|jpe?g|webp|gif|svg)(\?|$)/i.test(url);
+}
+
+function scoreImageFit(
+  width: number,
+  height: number,
+  targetWidth: number,
+  targetHeight: number,
+): number {
+  if (width <= 0 || height <= 0) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const ratio = width / height;
+  const targetRatio = targetWidth / targetHeight;
+  const ratioPenalty = Math.abs(ratio - targetRatio) / targetRatio;
+  const scaleFactor = Math.min(width / targetWidth, height / targetHeight);
+  const upscalePenalty = scaleFactor < 1 ? (1 - scaleFactor) * 2 : 0;
+  const resolutionBonus = Math.min(
+    0.25,
+    Math.log10((width * height) / 100_000),
+  );
+
+  return 1 - ratioPenalty - upscalePenalty + resolutionBonus;
+}
+
+function normalizeStoryServices(services: string[] | undefined): string[] {
+  return (services ?? [])
+    .map((service) => service.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function extractUsableImages(project: MetadataProject): Array<{
+  url: string;
+  width: number;
+  height: number;
+}> {
+  const images = Array.isArray(project.images) ? project.images : [];
+
+  return images
+    .filter((image) => Boolean(image?.url && isLikelyImageUrl(image.url)))
+    .map((image) => ({
+      url: String(image.url),
+      width: Number(image.width ?? 0),
+      height: Number(image.height ?? 0),
+    }))
+    .filter((image) => image.width > 0 && image.height > 0);
+}
+
+function selectBestUnusedImage(
+  images: Array<{ url: string; width: number; height: number }>,
+  usedUrls: Set<string>,
+  targetWidth: number,
+  targetHeight: number,
+): { url: string; width: number; height: number } | null {
+  const candidates = images
+    .filter((image) => !usedUrls.has(image.url))
+    .map((image) => ({
+      image,
+      score: scoreImageFit(
+        image.width,
+        image.height,
+        targetWidth,
+        targetHeight,
+      ),
+    }))
+    .filter((entry) => Number.isFinite(entry.score))
+    .sort((left, right) => right.score - left.score);
+
+  return candidates[0]?.image ?? null;
+}
+
+function chooseStoryLogoUrl(
+  client: StoryClientEntry,
+  uploadedLogoUrl: string | undefined,
+): string | null {
+  if (client.thumbnailUrl && isLikelyImageUrl(client.thumbnailUrl)) {
+    return client.thumbnailUrl;
+  }
+
+  if (client.usableImages[0]?.url) {
+    return client.usableImages[0].url;
+  }
+
+  return uploadedLogoUrl ?? null;
+}
+
 function createContainSvgAsset(
   logoFilePath: string,
   sourceBytes: Uint8Array,
@@ -729,6 +905,70 @@ async function selectProposalClients(
   return withOverrides.slice(0, CLIENTS_PER_PAGE);
 }
 
+async function selectStoryClients(
+  options: StoryPagePopulateOptions,
+): Promise<StoryClientEntry[]> {
+  const [catalog, proposalSelectedClients] = await Promise.all([
+    readMetadataCatalog(),
+    selectProposalClients(options),
+  ]);
+  const { projects } = catalog;
+  const projectBySlug = new Map(
+    projects
+      .filter((project): project is MetadataProject & { slug: string } =>
+        Boolean(project.slug?.trim()),
+      )
+      .map((project) => [project.slug.trim(), project]),
+  );
+
+  const maxCompanies =
+    typeof options.maxCompanies === "number" && options.maxCompanies > 0
+      ? Math.min(options.maxCompanies, 12)
+      : STORY_COMPANIES_COUNT;
+
+  const candidates: StoryClientEntry[] = [];
+
+  for (const proposalClient of proposalSelectedClients) {
+    const project = projectBySlug.get(proposalClient.slug);
+    if (!project) {
+      continue;
+    }
+
+    const projectName = project.name?.trim() || proposalClient.displayName;
+    const logoFilePath = proposalClient.logoFilePath;
+    if (!logoFilePath) {
+      continue;
+    }
+
+    const usableImages = extractUsableImages(project);
+    if (usableImages.length === 0) {
+      continue;
+    }
+
+    candidates.push({
+      slug: proposalClient.slug,
+      displayName: proposalClient.displayName,
+      logoFilePath,
+      primarySector: proposalClient.primarySector,
+      category: proposalClient.category,
+      score: proposalClient.score,
+      tagline: project.tagline?.trim() || projectName,
+      services: normalizeStoryServices(project.services),
+      thumbnailUrl: project.thumbnail?.trim() || null,
+      usableImages,
+    });
+  }
+
+  const selected = candidates.slice(0, maxCompanies);
+  if (selected.length < maxCompanies) {
+    throw new Error(
+      `Could not select ${maxCompanies} story clients with required assets. Selected ${selected.length}.`,
+    );
+  }
+
+  return selected;
+}
+
 function extractUploadUrl(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -935,6 +1175,386 @@ async function updateTemplateLayers(
       body: JSON.stringify(payload),
     },
   );
+}
+
+async function fetchTemplatePages(
+  templateId: string,
+): Promise<TemplatedPageSnapshot[]> {
+  const fullTemplateResponse = await templatedRequest<unknown>(
+    `/template/${encodeURIComponent(templateId)}`,
+  );
+
+  const fromFullTemplate =
+    fullTemplateResponse &&
+    typeof fullTemplateResponse === "object" &&
+    Array.isArray((fullTemplateResponse as { pages?: unknown }).pages)
+      ? (fullTemplateResponse as { pages: unknown[] }).pages
+      : null;
+
+  const pagesCandidate = fromFullTemplate
+    ? fromFullTemplate
+    : await templatedRequest<unknown>(
+        `/template/${encodeURIComponent(templateId)}/pages`,
+      );
+
+  if (!Array.isArray(pagesCandidate)) {
+    throw new Error(
+      `Templated API returned an unexpected pages payload for template ${templateId}.`,
+    );
+  }
+
+  return pagesCandidate.filter((entry): entry is TemplatedPageSnapshot => {
+    return Boolean(
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as { page?: unknown }).page === "string",
+    );
+  });
+}
+
+function clonePageSnapshot(
+  sourcePage: TemplatedPageSnapshot,
+  targetPageName: string,
+): TemplatedPageSnapshot {
+  const clone = JSON.parse(JSON.stringify(sourcePage)) as TemplatedPageSnapshot;
+  clone.page = targetPageName;
+  return clone;
+}
+
+interface ImageSlot {
+  layer: string;
+  width: number;
+  height: number;
+}
+
+// Derive the fillable image slots of a masonry/full blueprint straight from its
+// snapshot: every image-type layer becomes a slot carrying its real layer name
+// (the write target) and its frame's width/height (the best-fit scoring target).
+// This means the workflow adapts automatically to layer renames and per-frame
+// resizes in the master — masonry-a exposes 4 slots, masonry-b exposes 6 — with
+// no hardcoded names or dimensions.
+function deriveImageSlots(
+  page: TemplatedPageSnapshot | undefined,
+): ImageSlot[] {
+  const layers = (page?.layers ?? {}) as Record<string, unknown>;
+  const slots: ImageSlot[] = [];
+  for (const [name, value] of Object.entries(layers)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const layer = value as Record<string, unknown>;
+    if (layer.type !== "image") {
+      continue;
+    }
+    slots.push({
+      layer: name,
+      width: Number(layer.width) || 0,
+      height: Number(layer.height) || 0,
+    });
+  }
+  // Largest frames first so a wide hero banner claims the best-fitting image
+  // before the narrower column frames get their pick.
+  slots.sort((a, b) => b.width * b.height - a.width * a.height);
+  return slots;
+}
+
+function buildTextLayerUpdateFromSnapshot(
+  pageByName: Map<string, TemplatedPageSnapshot>,
+  pageName: string,
+  layerName: string,
+  text: string,
+): Record<string, unknown> {
+  const pageSnapshot = pageByName.get(pageName);
+  const snapshotLayers = pageSnapshot?.layers;
+
+  const existingLayer =
+    snapshotLayers && typeof snapshotLayers === "object"
+      ? (snapshotLayers as Record<string, unknown>)[layerName]
+      : undefined;
+
+  if (existingLayer && typeof existingLayer === "object") {
+    return stripPositionalFields({
+      ...(existingLayer as Record<string, unknown>),
+      layer: layerName,
+      type: "text",
+      text,
+    });
+  }
+
+  return {
+    layer: layerName,
+    type: "text",
+    text,
+  };
+}
+
+// A partial layer update must NOT carry x/y. Many blueprint layers belong to a
+// group (e.g. the 12 story_client_service* layers share one group); on a partial
+// `updateTemplateLayers` call Templated re-adds the group's origin to any x/y we
+// send, translating the layer off-position on every write. The page snapshot was
+// already cloned with faithful absolute coordinates (a full-page PUT preserves
+// grouped positions exactly), so we simply omit x/y and let Templated keep the
+// stored position. width/height are scale, not translation, so they are safe.
+function stripPositionalFields(
+  layer: Record<string, unknown>,
+): Record<string, unknown> {
+  const { x: _x, y: _y, ...rest } = layer;
+  void _x;
+  void _y;
+  return rest;
+}
+
+function buildImageLayerUpdateFromSnapshot(
+  pageByName: Map<string, TemplatedPageSnapshot>,
+  pageName: string,
+  layerName: string,
+  imageUrl: string,
+  options?: { width?: number; height?: number; objectFit?: string },
+): Record<string, unknown> {
+  const pageSnapshot = pageByName.get(pageName);
+  const snapshotLayers = pageSnapshot?.layers;
+
+  const existingLayer =
+    snapshotLayers && typeof snapshotLayers === "object"
+      ? (snapshotLayers as Record<string, unknown>)[layerName]
+      : undefined;
+
+  if (existingLayer && typeof existingLayer === "object") {
+    const merged = {
+      ...(existingLayer as Record<string, unknown>),
+      layer: layerName,
+      type: "image",
+      image_url: imageUrl,
+    } as Record<string, unknown>;
+
+    if (typeof options?.width === "number") {
+      merged.width = options.width;
+    }
+
+    if (typeof options?.height === "number") {
+      merged.height = options.height;
+    }
+
+    if (typeof options?.objectFit === "string") {
+      merged.object_fit = options.objectFit;
+    }
+
+    return stripPositionalFields(merged);
+  }
+
+  const fallback: Record<string, unknown> = {
+    layer: layerName,
+    type: "image",
+    image_url: imageUrl,
+  };
+
+  if (typeof options?.width === "number") {
+    fallback.width = options.width;
+  }
+
+  if (typeof options?.height === "number") {
+    fallback.height = options.height;
+  }
+
+  if (typeof options?.objectFit === "string") {
+    fallback.object_fit = options.objectFit;
+  }
+
+  return fallback;
+}
+
+async function upsertTemplatePageSnapshot(
+  templateId: string,
+  page: TemplatedPageSnapshot,
+): Promise<void> {
+  await templatedRequest<unknown>(
+    `/template/${encodeURIComponent(templateId)}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        pages: [page],
+      }),
+    },
+  );
+}
+
+async function upsertTemplatePagesSnapshot(
+  templateId: string,
+  pages: TemplatedPageSnapshot[],
+): Promise<void> {
+  await templatedRequest<unknown>(
+    `/template/${encodeURIComponent(templateId)}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        pages,
+      }),
+    },
+  );
+}
+
+async function reorderPagesBetweenAnchors(
+  templateId: string,
+  generatedPageNames: string[],
+  startAnchorPageName: string,
+  endAnchorPageName: string,
+  reportProgress?: TemplateProgressReporter,
+): Promise<void> {
+  // Templated has NO page-reorder API: a template PUT upserts pages by name and
+  // keeps them in CREATION order regardless of the order in the payload array.
+  // The freshly generated story pages were appended at the very end of the deck,
+  // but they must sit between `startAnchorPageName` (clients-story-intro) and
+  // `endAnchorPageName` (team-intro).
+  //
+  // The only mechanism that moves a page is destructive-remove + recreate, which
+  // re-appends the recreated page at the end. So we relocate the "tail" — every
+  // page from the end anchor onward that is NOT one of the generated pages — by
+  // deleting it and recreating it from its full snapshot. Because the generated
+  // pages already sit ahead of the tail (they were appended last), recreating the
+  // tail after them yields the desired order:
+  //   ... startAnchor, [generated pages...], endAnchor, ...rest-of-deck
+  const generatedSet = new Set(generatedPageNames.filter(Boolean));
+  if (generatedSet.size === 0) {
+    return;
+  }
+
+  const pages = await fetchTemplatePages(templateId);
+  const orderedNames = pages.map((page) => page.page);
+  const startAnchorIndex = orderedNames.indexOf(startAnchorPageName);
+  const endAnchorIndex = orderedNames.indexOf(endAnchorPageName);
+
+  if (startAnchorIndex < 0 || endAnchorIndex < 0) {
+    throw new Error(
+      `Cannot position story pages: required anchors "${startAnchorPageName}" and/or "${endAnchorPageName}" were not found in template ${templateId}.`,
+    );
+  }
+
+  // Already correct? The generated pages should be a contiguous block directly
+  // between the two anchors.
+  const between = orderedNames.slice(startAnchorIndex + 1, endAnchorIndex);
+  const alreadyPlaced =
+    between.length === generatedSet.size &&
+    between.every((name) => generatedSet.has(name));
+  if (alreadyPlaced) {
+    return;
+  }
+
+  // The tail is the end anchor and everything after it, minus any generated
+  // pages that (on a re-run) may already be interleaved there.
+  const tailPages = pages
+    .slice(endAnchorIndex)
+    .filter((page) => !generatedSet.has(page.page));
+
+  if (tailPages.length === 0) {
+    return;
+  }
+
+  // Safety: never destroy a page whose snapshot came back without layers — we
+  // could not faithfully recreate it, so abort rather than lose real content.
+  const emptyTail = tailPages.filter(
+    (page) =>
+      !page.layers ||
+      typeof page.layers !== "object" ||
+      Object.keys(page.layers).length === 0,
+  );
+  if (emptyTail.length > 0) {
+    throw new Error(
+      `Aborting page reorder to avoid data loss: ${emptyTail
+        .map((page) => page.page)
+        .join(", ")} returned no layers from template ${templateId}.`,
+    );
+  }
+
+  const tailNames = tailPages.map((page) => page.page);
+
+  if (reportProgress) {
+    await reportProgress(
+      `Positioning ${generatedSet.size} story pages before ${endAnchorPageName} by relocating ${tailPages.length} trailing pages (${tailNames.join(", ")})...`,
+    );
+  }
+
+  // Delete the tail (destructive), then recreate each page from its snapshot in
+  // original order so they re-append sequentially after the generated block.
+  await hideTemplatePages(templateId, tailNames, reportProgress);
+
+  for (const page of tailPages) {
+    const recreated = clonePageSnapshot(page, page.page);
+    recreated.hide = false;
+    await upsertTemplatePageSnapshot(templateId, recreated);
+  }
+
+  // Verify none of the relocated pages were lost during recreation.
+  const pagesAfter = await fetchTemplatePages(templateId);
+  const namesAfter = new Set(pagesAfter.map((page) => page.page));
+  const lost = tailNames.filter((name) => !namesAfter.has(name));
+  if (lost.length > 0) {
+    throw new Error(
+      `Page reorder failed: trailing pages were lost after recreation in template ${templateId}: ${lost.join(", ")}.`,
+    );
+  }
+}
+
+async function removeTemplatePages(
+  templateId: string,
+  pageNamesToRemove: string[],
+  reportProgress?: TemplateProgressReporter,
+): Promise<void> {
+  const namesToRemove = new Set(pageNamesToRemove.filter(Boolean));
+  if (namesToRemove.size === 0) {
+    return;
+  }
+
+  const pages = await fetchTemplatePages(templateId);
+  const filteredPages = pages.filter((page) => !namesToRemove.has(page.page));
+
+  if (filteredPages.length === pages.length) {
+    return;
+  }
+
+  if (reportProgress) {
+    await reportProgress(
+      `Removing original story blueprint pages: ${[...namesToRemove].join(", ")}...`,
+    );
+  }
+
+  await upsertTemplatePagesSnapshot(templateId, filteredPages);
+}
+
+async function hideTemplatePages(
+  templateId: string,
+  pageNamesToHide: string[],
+  reportProgress?: TemplateProgressReporter,
+): Promise<void> {
+  const namesToHide = [...new Set(pageNamesToHide.filter(Boolean))];
+  if (namesToHide.length === 0) {
+    return;
+  }
+
+  const pages = await fetchTemplatePages(templateId);
+  const pageByName = new Map(pages.map((page) => [page.page, page]));
+
+  if (reportProgress) {
+    await reportProgress(
+      `Hiding original story blueprint pages: ${namesToHide.join(", ")}...`,
+    );
+  }
+
+  for (const pageName of namesToHide) {
+    const existing = pageByName.get(pageName);
+    if (!existing) {
+      continue;
+    }
+
+    const updated = clonePageSnapshot(existing, pageName);
+    updated.hide = true;
+    await upsertTemplatePageSnapshot(templateId, updated);
+  }
 }
 
 function createEditableTemplateUrl(templateId: string): string {
@@ -1193,6 +1813,8 @@ export async function createAndPopulateTemplateForUser(
       uploadedClients,
       options,
     );
+    const templatePages = await fetchTemplatePages(template.id);
+    const pageByName = new Map(templatePages.map((page) => [page.page, page]));
     const presentationPage = payload.pages.find(
       (page) => page.page === "presentation",
     );
@@ -1202,14 +1824,75 @@ export async function createAndPopulateTemplateForUser(
 
     const presentationLayers = presentationPage?.layers ?? {};
     const clientsLayers = clientsDetailPage?.layers ?? {};
+
+    const presentationLayerEntries = Object.entries(presentationLayers).map(
+      ([layerKey, layerValue]) => {
+        const text =
+          layerValue && typeof layerValue === "object"
+            ? (layerValue as Record<string, unknown>).text
+            : undefined;
+        return [
+          layerKey,
+          buildTextLayerUpdateFromSnapshot(
+            pageByName,
+            "presentation",
+            layerKey,
+            typeof text === "string" ? text : "",
+          ),
+        ] as const;
+      },
+    );
+    const normalizedPresentationLayers = Object.fromEntries(
+      presentationLayerEntries,
+    );
+
     const textLayerEntries = Object.entries(clientsLayers).filter(([key]) =>
       /^col[12]_client\d+$/i.test(key),
     );
+    const normalizedTextLayers = Object.fromEntries(
+      textLayerEntries.map(([layerKey, layerValue]) => {
+        const text =
+          layerValue && typeof layerValue === "object"
+            ? (layerValue as Record<string, unknown>).text
+            : undefined;
+        return [
+          layerKey,
+          buildTextLayerUpdateFromSnapshot(
+            pageByName,
+            "clients-detail",
+            layerKey,
+            typeof text === "string" ? text : "",
+          ),
+        ] as const;
+      }),
+    );
+
     const logoLayerEntries = Object.entries(clientsLayers).filter(([key]) =>
       /^col[1-4]_logo[1-5]$/i.test(key),
     );
+    const normalizedLogoLayers = Object.fromEntries(
+      logoLayerEntries.map(([layerKey, layerValue]) => {
+        const imageUrl =
+          layerValue && typeof layerValue === "object"
+            ? (layerValue as Record<string, unknown>).image_url
+            : undefined;
+        return [
+          layerKey,
+          buildImageLayerUpdateFromSnapshot(
+            pageByName,
+            "clients-detail",
+            layerKey,
+            typeof imageUrl === "string" ? imageUrl : "",
+            {
+              width: LOGO_WIDTH,
+              height: LOGO_HEIGHT,
+            },
+          ),
+        ] as const;
+      }),
+    );
 
-    if (Object.keys(presentationLayers).length > 0) {
+    if (Object.keys(normalizedPresentationLayers).length > 0) {
       if (reportProgress) {
         await reportProgress("Updating presentation page layers...");
       }
@@ -1217,7 +1900,7 @@ export async function createAndPopulateTemplateForUser(
         pages: [
           {
             page: "presentation",
-            layers: presentationLayers,
+            layers: normalizedPresentationLayers,
           },
         ],
       });
@@ -1231,13 +1914,13 @@ export async function createAndPopulateTemplateForUser(
         pages: [
           {
             page: "clients-detail",
-            layers: Object.fromEntries(textLayerEntries),
+            layers: normalizedTextLayers,
           },
         ],
       });
     }
 
-    for (const [logoKey, logoLayer] of logoLayerEntries) {
+    for (const [logoKey] of logoLayerEntries) {
       if (reportProgress) {
         await reportProgress(
           `Updating clients-detail image layer ${logoKey}...`,
@@ -1248,14 +1931,14 @@ export async function createAndPopulateTemplateForUser(
           {
             page: "clients-detail",
             layers: {
-              [logoKey]: logoLayer,
+              [logoKey]: normalizedLogoLayers[logoKey],
             },
           },
         ],
       });
     }
 
-    const presentationKeys = Object.keys(presentationLayers);
+    const presentationKeys = Object.keys(normalizedPresentationLayers);
     const clientsDetailKeys = [
       ...textLayerEntries.map(([key]) => key),
       ...logoLayerEntries.map(([key]) => key),
@@ -1306,6 +1989,422 @@ export async function createAndPopulateTemplateForUser(
 
     throw error;
   }
+}
+
+export async function populateClientStoryPages(
+  templateId: string,
+  options: StoryPagePopulateOptions = {},
+  reportProgress?: TemplateProgressReporter,
+): Promise<StoryPagePopulateResult> {
+  const normalizedTemplateId = templateId.trim();
+  if (!normalizedTemplateId) {
+    throw new Error("templateId is required to populate story pages.");
+  }
+
+  const selectedClients = await selectStoryClients(options);
+  if (reportProgress) {
+    await reportProgress(
+      `Selected ${selectedClients.length} story clients. Uploading logo fallbacks...`,
+    );
+  }
+
+  const uploadedLogos = await uploadClientLogos(
+    selectedClients,
+    reportProgress,
+  );
+  const uploadedLogoBySlug = new Map(
+    uploadedLogos.map((client) => [client.slug, client.logoUrl]),
+  );
+
+  const templatePages = await fetchTemplatePages(normalizedTemplateId);
+  const pageByName = new Map(templatePages.map((page) => [page.page, page]));
+  const existingPageNames = new Set(pageByName.keys());
+
+  const resolveBlueprintPage = (candidates: string[]): string => {
+    const match = candidates.find((name) => existingPageNames.has(name));
+    if (!match) {
+      throw new Error(
+        `Template ${normalizedTemplateId} is missing required blueprint page. Expected one of: ${candidates.join(", ")}.`,
+      );
+    }
+    return match;
+  };
+
+  const resolveOptionalBlueprintPage = (
+    candidates: string[],
+  ): string | null => {
+    return candidates.find((name) => existingPageNames.has(name)) ?? null;
+  };
+
+  const descriptionBlueprintPage = resolveBlueprintPage(
+    STORY_DESCRIPTION_BLUEPRINT_CANDIDATES,
+  );
+  const masonryABlueprintPage = resolveBlueprintPage(
+    STORY_MASONRY_A_BLUEPRINT_CANDIDATES,
+  );
+  const fullBlueprintPage = resolveBlueprintPage(
+    STORY_FULL_BLUEPRINT_CANDIDATES,
+  );
+  const masonryBBlueprintPage =
+    resolveOptionalBlueprintPage(STORY_MASONRY_B_BLUEPRINT_CANDIDATES) ??
+    masonryABlueprintPage;
+
+  if (masonryBBlueprintPage === masonryABlueprintPage && reportProgress) {
+    await reportProgress(
+      "Optional masonry-b blueprint not found; using masonry-a blueprint for all masonry pages.",
+    );
+  }
+
+  // Read each blueprint's image slots once (names + frame sizes). Blueprints are
+  // shared across all clients and never mutated, so this is stable for the run.
+  const masonryASlots = deriveImageSlots(pageByName.get(masonryABlueprintPage));
+  const masonryBSlots = deriveImageSlots(pageByName.get(masonryBBlueprintPage));
+  const fullSlots = deriveImageSlots(pageByName.get(fullBlueprintPage));
+
+  if (reportProgress) {
+    await reportProgress(
+      `Masonry blueprint slots: A=${masonryASlots.length} (${masonryASlots
+        .map((s) => s.layer)
+        .join(", ")}), B=${masonryBSlots.length} (${masonryBSlots
+        .map((s) => s.layer)
+        .join(", ")}).`,
+    );
+  }
+
+  const ensurePageExists = async (
+    targetPageName: string,
+    sourcePageName: string,
+  ): Promise<void> => {
+    if (existingPageNames.has(targetPageName)) {
+      return;
+    }
+
+    const sourcePage = pageByName.get(sourcePageName);
+    if (!sourcePage) {
+      throw new Error(
+        `Cannot clone story page \"${targetPageName}\" because blueprint page \"${sourcePageName}\" was not found.`,
+      );
+    }
+
+    if (reportProgress) {
+      await reportProgress(
+        `Copying story page ${sourcePageName} -> ${targetPageName}...`,
+      );
+    }
+
+    const clonedPage = clonePageSnapshot(sourcePage, targetPageName);
+    await upsertTemplatePageSnapshot(normalizedTemplateId, clonedPage);
+    pageByName.set(targetPageName, clonedPage);
+    existingPageNames.add(targetPageName);
+  };
+
+  const descriptionPages: string[] = [];
+  const masonryPages: string[] = [];
+  const fullPages: string[] = [];
+  const generatedPagesInOrder: string[] = [];
+  for (const [clientIndex, client] of selectedClients.entries()) {
+    const ordinal = String(clientIndex + 1).padStart(2, "0");
+    const suffix = `${ordinal}-${slugifyPageSuffix(client.displayName)}`;
+
+    const descriptionPageName = `clients-story-description-${suffix}`;
+    await ensurePageExists(descriptionPageName, descriptionBlueprintPage);
+
+    const descriptionTextLayers: Record<string, Record<string, unknown>> = {
+      story_client_name: buildTextLayerUpdateFromSnapshot(
+        pageByName,
+        descriptionPageName,
+        "story_client_name",
+        client.displayName,
+      ),
+      story_client_tagline: buildTextLayerUpdateFromSnapshot(
+        pageByName,
+        descriptionPageName,
+        "story_client_tagline",
+        client.tagline,
+      ),
+    };
+
+    for (let index = 0; index < 12; index += 1) {
+      // The master template's 6th service layer is named "story_client_service"
+      // (no numeric suffix); every other slot is story_client_service{1..12}.
+      const serviceKey =
+        index === 5 ? "story_client_service" : `story_client_service${index + 1}`;
+      const serviceValue = client.services[index]?.trim();
+      // Match the template's existing bullet style ("• Foo") instead of leaving
+      // plain text that visually breaks the list alignment.
+      const serviceText = serviceValue ? `• ${serviceValue}` : "";
+      descriptionTextLayers[serviceKey] = buildTextLayerUpdateFromSnapshot(
+        pageByName,
+        descriptionPageName,
+        serviceKey,
+        serviceText,
+      );
+    }
+
+    if (reportProgress) {
+      await reportProgress(
+        `Updating description text layers for ${client.displayName}...`,
+      );
+    }
+    await updateTemplateLayers(normalizedTemplateId, {
+      pages: [
+        {
+          page: descriptionPageName,
+          layers: descriptionTextLayers,
+        },
+      ],
+    });
+
+    const storyLogoUrl = chooseStoryLogoUrl(
+      client,
+      uploadedLogoBySlug.get(client.slug),
+    );
+    if (!storyLogoUrl) {
+      throw new Error(
+        `Could not determine a story_client_logo source for ${client.displayName}.`,
+      );
+    }
+
+    if (reportProgress) {
+      await reportProgress(
+        `Updating description logo layer for ${client.displayName}...`,
+      );
+    }
+    await updateTemplateLayers(normalizedTemplateId, {
+      pages: [
+        {
+          page: descriptionPageName,
+          layers: {
+            story_client_logo: buildImageLayerUpdateFromSnapshot(
+              pageByName,
+              descriptionPageName,
+              "story_client_logo",
+              storyLogoUrl,
+              {
+                width: STORY_DESCRIPTION_LOGO_WIDTH,
+                height: STORY_DESCRIPTION_LOGO_HEIGHT,
+                // The blueprint layer ships with object_fit "fill", which
+                // stretches the thumbnail to 936x854. "contain" keeps the
+                // thumbnail's native aspect ratio inside that fixed box.
+                objectFit: "contain",
+              },
+            ),
+          },
+        },
+      ],
+    });
+    descriptionPages.push(descriptionPageName);
+    generatedPagesInOrder.push(descriptionPageName);
+
+    const usedUrls = new Set<string>();
+
+    const pickBestUnusedImage = (
+      targetWidth: number,
+      targetHeight: number,
+    ): { url: string; width: number; height: number } | null => {
+      const selected = selectBestUnusedImage(
+        client.usableImages,
+        usedUrls,
+        targetWidth,
+        targetHeight,
+      );
+      if (selected) {
+        usedUrls.add(selected.url);
+      }
+      return selected;
+    };
+
+    const remainingUnusedCount = (): number => {
+      return client.usableImages.filter((image) => !usedUrls.has(image.url))
+        .length;
+    };
+
+    let masonryPageIndex = 1;
+    while (true) {
+      // Alternate the two masonry layouts for visual variety. Each layout
+      // exposes a different number of image slots (a = 4, b = 6), read from the
+      // blueprint, so the number of images a page needs is slots.length.
+      const useMasonryA = masonryPageIndex % 2 === 1;
+      const masonryBlueprint = useMasonryA
+        ? masonryABlueprintPage
+        : masonryBBlueprintPage;
+      const slots = useMasonryA ? masonryASlots : masonryBSlots;
+
+      if (slots.length === 0) {
+        break;
+      }
+      if (remainingUnusedCount() < slots.length) {
+        break;
+      }
+
+      // Fill the largest frames first (slots are sorted largest-first) so the
+      // wide hero banner claims a wide image before the columns.
+      const picks: { slot: ImageSlot; url: string }[] = [];
+      for (const slot of slots) {
+        const image = pickBestUnusedImage(slot.width, slot.height);
+        if (!image) {
+          break;
+        }
+        picks.push({ slot, url: image.url });
+      }
+      if (picks.length < slots.length) {
+        break;
+      }
+
+      const masonryPageName = `clients-story-masonry-${String(masonryPageIndex).padStart(2, "0")}-${suffix}`;
+      await ensurePageExists(masonryPageName, masonryBlueprint);
+
+      if (reportProgress) {
+        await reportProgress(
+          `Updating masonry page ${masonryPageName} (${slots.length} images) for ${client.displayName}...`,
+        );
+      }
+
+      const masonryLayers: Record<string, Record<string, unknown>> = {};
+      for (const { slot, url } of picks) {
+        // No width/height override: keep each frame's designed geometry (the
+        // frames vary, e.g. 620x510 / 608x510 / 518x510). object_fit "cover"
+        // fills every frame cleanly regardless of the source image ratio.
+        masonryLayers[slot.layer] = buildImageLayerUpdateFromSnapshot(
+          pageByName,
+          masonryPageName,
+          slot.layer,
+          url,
+          { objectFit: "cover" },
+        );
+      }
+
+      await updateTemplateLayers(normalizedTemplateId, {
+        pages: [{ page: masonryPageName, layers: masonryLayers }],
+      });
+
+      masonryPages.push(masonryPageName);
+      generatedPagesInOrder.push(masonryPageName);
+      masonryPageIndex += 1;
+    }
+
+    if (masonryPageIndex === 1) {
+      throw new Error(
+        `Could not select enough images for any masonry page for ${client.displayName}.`,
+      );
+    }
+
+    // The full-bleed blueprint has a single image slot (its real layer name and
+    // size come from the blueprint, so a rename like full_image -> ... just works).
+    const fullSlot = fullSlots[0];
+    let fullPageIndex = 1;
+    while (fullSlot && remainingUnusedCount() > 0) {
+      const fullHeroImage = pickBestUnusedImage(fullSlot.width, fullSlot.height);
+      if (!fullHeroImage) {
+        break;
+      }
+
+      const fullPageName = `clients-story-full-${String(fullPageIndex).padStart(2, "0")}-${suffix}`;
+      await ensurePageExists(fullPageName, fullBlueprintPage);
+
+      if (reportProgress) {
+        await reportProgress(
+          `Updating full page ${fullPageName} for ${client.displayName}...`,
+        );
+      }
+
+      await updateTemplateLayers(normalizedTemplateId, {
+        pages: [
+          {
+            page: fullPageName,
+            layers: {
+              [fullSlot.layer]: buildImageLayerUpdateFromSnapshot(
+                pageByName,
+                fullPageName,
+                fullSlot.layer,
+                fullHeroImage.url,
+                { objectFit: "cover" },
+              ),
+            },
+          },
+        ],
+      });
+
+      fullPages.push(fullPageName);
+      generatedPagesInOrder.push(fullPageName);
+      fullPageIndex += 1;
+    }
+  }
+
+  const generatedPages = generatedPagesInOrder;
+
+  // Insert only the freshly generated story pages between the two anchors, in
+  // per-client order (each client starts with its description page). Leave
+  // clients-detail where it already sits, ahead of clients-story-intro.
+  await reorderPagesBetweenAnchors(
+    normalizedTemplateId,
+    generatedPages,
+    "clients-story-intro",
+    "team-intro",
+    reportProgress,
+  );
+
+  const storyBlueprintPagesToRemove = [
+    descriptionBlueprintPage,
+    masonryABlueprintPage,
+    masonryBBlueprintPage,
+    fullBlueprintPage,
+  ];
+
+  // Templated treats `hide: true` on a template update as a DESTRUCTIVE removal:
+  // the page and its layers are deleted from the template HTML. That is exactly
+  // the "remove the original blueprint pages once we're done" step the workflow
+  // requires. (A PUT that merely omits pages would not delete them, since the
+  // template update endpoint upserts by page name.)
+  await hideTemplatePages(
+    normalizedTemplateId,
+    storyBlueprintPagesToRemove,
+    reportProgress,
+  );
+
+  const pagesAfterPopulation = await fetchTemplatePages(normalizedTemplateId);
+  const existingPagesAfterPopulation = new Set(
+    pagesAfterPopulation.map((page) => page.page),
+  );
+  const missingPages = generatedPages.filter(
+    (pageName) => !existingPagesAfterPopulation.has(pageName),
+  );
+
+  if (missingPages.length > 0) {
+    throw new Error(
+      `Story page creation verification failed. Missing ${missingPages.length} page(s): ${missingPages.join(
+        ", ",
+      )}.`,
+    );
+  }
+
+  const storiesCreated = selectedClients.length;
+  const pagesCreated = generatedPages.length;
+  const summary = `Created ${storiesCreated} client stories and ${pagesCreated} story pages.`;
+
+  if (reportProgress) {
+    await reportProgress(
+      `${summary} Verified all created pages exist in the template.`,
+    );
+  }
+
+  return {
+    templateId: normalizedTemplateId,
+    selectedClients: selectedClients.map((client) => ({
+      slug: client.slug,
+      name: client.displayName,
+      tagline: client.tagline,
+      services: client.services,
+    })),
+    storiesCreated,
+    pagesCreated,
+    generatedPages,
+    descriptionPages,
+    masonryPages,
+    fullPages,
+    summary,
+    editableUrl: createEditableTemplateUrl(normalizedTemplateId),
+  };
 }
 
 export async function previewProposalClients(

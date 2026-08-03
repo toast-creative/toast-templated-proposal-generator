@@ -1,5 +1,8 @@
-# DBOS  and LLM 
-ANTHROPIC_API_KEY=sk-...
+# DBOS and LLM
+# Preferred provider
+OPENAI_API_KEY=sk-...
+# Optional: only used when OPENAI_API_KEY is absent
+# ANTHROPIC_API_KEY=sk-...
 DATABASE_URL=postgresql://user:password@host/db?sslmode=require
 
 # Templated integration

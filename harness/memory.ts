@@ -7,8 +7,8 @@ import { model } from "./model";
 // Token budget — not turn count — is what actually drives context bloat, and it
 // holds up even when the model batches many tool calls into one turn.
 // (Rough estimate: ~4 chars per token. Kept low so compaction kicks in on a short task.)
-export const MAX_CONTEXT_TOKENS = 3000;
-export const KEEP_CONTEXT_TOKENS = 1500;
+export const MAX_CONTEXT_TOKENS = 30000;
+export const KEEP_CONTEXT_TOKENS = 15000;
 
 export function estimateTokens(messages: ModelMessage[]): number {
   const chars = messages.reduce(

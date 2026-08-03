@@ -6,6 +6,7 @@ import { z } from "zod";
 import { runInSandbox, type SandboxApi } from "./sandbox";
 import {
   createAndPopulateTemplateForUser,
+  populateClientStoryPages,
   createTemplateForUser,
   previewProposalClients,
   type TemplateProgressReporter,
@@ -546,6 +547,18 @@ export const tools = {
       }),
   }),
 
+  populateClientStoryPages: tool({
+    description:
+      "Populate story pages for the best matching clients as a separate post-template step. Copies story template pages, fills text/image layers, verifies page creation, and returns created story/page counts.",
+    inputSchema: z.object({
+      templateId: z.string().min(1),
+      clientName: z.string().optional(),
+      serviceFocus: z.array(z.string()).optional(),
+      approvedClientNames: z.array(z.string()).optional(),
+      maxCompanies: z.number().int().min(1).max(12).optional(),
+    }),
+  }),
+
   // Privileged: only the billing specialist gets this. Moves real money.
   issueRefund: tool({
     description:
@@ -657,6 +670,34 @@ export async function runTool(
             ? args.customerName.trim()
             : undefined,
       });
+    case "populateClientStoryPages":
+      return (await populateClientStoryPages(
+        typeof args.templateId === "string" ? args.templateId.trim() : "",
+        {
+          clientName:
+            typeof args.clientName === "string" && args.clientName.trim()
+              ? args.clientName.trim()
+              : undefined,
+          serviceFocus: Array.isArray(args.serviceFocus)
+            ? args.serviceFocus
+                .filter((value): value is string => typeof value === "string")
+                .map((value) => value.trim())
+                .filter(Boolean)
+            : undefined,
+          approvedClientNames: Array.isArray(args.approvedClientNames)
+            ? args.approvedClientNames
+                .filter((value): value is string => typeof value === "string")
+                .map((value) => value.trim())
+                .filter(Boolean)
+            : undefined,
+          maxCompanies:
+            typeof args.maxCompanies === "number" &&
+            Number.isFinite(args.maxCompanies)
+              ? Math.trunc(args.maxCompanies)
+              : undefined,
+        },
+        reportProgress,
+      )) as unknown as Record<string, unknown>;
     case "issueRefund":
       return {
         refunded: true,

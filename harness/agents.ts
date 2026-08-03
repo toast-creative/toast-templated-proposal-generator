@@ -114,6 +114,7 @@ For each work item:
 9. Use createTemplateForUser only when the user explicitly asks for clone-only behavior.
 10. Do not call template provisioning tools until you have a templateName.
 11. After a template provisioning tool succeeds, always share the returned editableUrl with the user.
+12. If the user explicitly asks for client story pages, run populateClientStoryPages as a separate step after template creation. Do not replace the normal createAndPopulateTemplateForUser flow with it.
 
 IMPORTANT: you are NOT allowed to issue refunds. If a customer needs an actual
 refund (money moved back), hand off to the billing specialist with
@@ -129,6 +130,7 @@ Handle the items, then briefly summarize what you did.`,
     researchCustomerProfile: tools.researchCustomerProfile,
     previewProposalClients: tools.previewProposalClients,
     createAndPopulateTemplateForUser: tools.createAndPopulateTemplateForUser,
+    populateClientStoryPages: tools.populateClientStoryPages,
     handoff: tools.handoff,
   },
 };

@@ -1,9 +1,16 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 
-// The one place the model is configured.
-//   - cheaper for a workshop → a "-haiku" variant (e.g. "claude-haiku-4-5")
-//   - this default            → "claude-sonnet-4-5"
-//
-// The provider reads ANTHROPIC_API_KEY from the environment at request time
-// (the server loads it from .dev.vars on startup).
-export const model = anthropic("claude-sonnet-4-5");
+const hasOpenAiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+const hasAnthropicKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+
+if (!hasOpenAiKey && !hasAnthropicKey) {
+  throw new Error(
+    "Missing model provider credentials. Set OPENAI_API_KEY (preferred) or ANTHROPIC_API_KEY in .dev.vars.",
+  );
+}
+
+// Prefer OpenAI by default (matches project docs), fall back to Anthropic.
+export const model = hasOpenAiKey
+  ? openai(process.env.OPENAI_MODEL?.trim() || "gpt-5.5")
+  : anthropic(process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-5");
