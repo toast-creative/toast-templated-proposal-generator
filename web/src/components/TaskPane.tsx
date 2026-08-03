@@ -60,6 +60,92 @@ type Turn =
     }
   | { id: string; role: "log"; level: string; text: string };
 
+type AgentActivity =
+  | { state: "idle" }
+  | { state: "thinking" }
+  | { state: "running_tool"; toolName: string }
+  | { state: "awaiting_approval" }
+  | { state: "awaiting_input" };
+
+function looksLikeClarification(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  return (
+    /[?]/.test(normalized) ||
+    /\b(please|could you|can you|what would|which|who|when|where|would you|do you)\b/i.test(
+      normalized,
+    )
+  );
+}
+
+function getActivity(
+  events: AgentEvent[],
+  workflowId: string | null,
+): AgentActivity {
+  if (!workflowId) {
+    return { state: "idle" };
+  }
+
+  const workflowEvents = events.filter(
+    (event) => "workflowId" in event && event.workflowId === workflowId,
+  );
+
+  if (workflowEvents.length === 0) {
+    return { state: "idle" };
+  }
+
+  const pendingTools = new Map<string, string>();
+  const pendingApprovals = new Set<string>();
+  let lastModelCompletedText = "";
+  let sawModelDelta = false;
+
+  for (const event of workflowEvents) {
+    switch (event.type) {
+      case EventType.ToolRequested:
+        pendingTools.set(event.toolCallId, event.name);
+        break;
+      case EventType.ToolCompleted:
+      case EventType.ToolFailed:
+        pendingTools.delete(event.toolCallId);
+        break;
+      case EventType.ApprovalRequested:
+        pendingApprovals.add(event.toolCallId);
+        break;
+      case EventType.ApprovalResolved:
+        pendingApprovals.delete(event.toolCallId);
+        break;
+      case EventType.ModelDelta:
+        sawModelDelta = true;
+        break;
+      case EventType.ModelCompleted:
+        lastModelCompletedText = event.text;
+        sawModelDelta = false;
+        break;
+    }
+  }
+
+  if (pendingApprovals.size > 0) {
+    return { state: "awaiting_approval" };
+  }
+
+  if (pendingTools.size > 0) {
+    const [toolName] = [...pendingTools.values()].slice(-1);
+    return { state: "running_tool", toolName };
+  }
+
+  if (looksLikeClarification(lastModelCompletedText)) {
+    return { state: "awaiting_input" };
+  }
+
+  if (sawModelDelta) {
+    return { state: "thinking" };
+  }
+
+  // While the workflow is still open and no blocking state is present,
+  // default to thinking because the next model/tool step may be imminent.
+  return { state: "thinking" };
+}
+
 function toTranscript(events: AgentEvent[]): {
   turns: Turn[];
   running: boolean;
@@ -225,6 +311,19 @@ export function TaskPane({
   const [supervised, setSupervised] = useState(false);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
   const { turns, running } = toTranscript(events);
+  const activity = getActivity(events, activeWorkflowId);
+
+  const loaderText =
+    activity.state === "running_tool"
+      ? `Running ${activity.toolName}`
+      : activity.state === "awaiting_approval"
+        ? "Awaiting approval"
+        : activity.state === "awaiting_input"
+          ? "Awaiting your input"
+          : "Thinking";
+
+  const inputLoading =
+    activity.state === "thinking" || activity.state === "running_tool";
 
   useEffect(() => {
     let currentWorkflowId: string | null = null;
@@ -299,7 +398,7 @@ export function TaskPane({
           ))}
           {running && (
             <div className="px-1">
-              <TextDotsLoader />
+              <TextDotsLoader text={loaderText} />
             </div>
           )}
         </ChatContainerContent>
@@ -310,7 +409,7 @@ export function TaskPane({
           value={input}
           onValueChange={setInput}
           onSubmit={submit}
-          isLoading={running}
+          isLoading={inputLoading}
         >
           <PromptInputTextarea
             className="dark:bg-transparent"

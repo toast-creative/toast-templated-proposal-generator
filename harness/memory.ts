@@ -13,7 +13,10 @@ export const KEEP_CONTEXT_TOKENS = 1500;
 export function estimateTokens(messages: ModelMessage[]): number {
   const chars = messages.reduce(
     (n, m) =>
-      n + (typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length),
+      n +
+      (typeof m.content === "string"
+        ? m.content.length
+        : JSON.stringify(m.content).length),
     0,
   );
   return Math.ceil(chars / 4);
@@ -32,12 +35,15 @@ export function buildContext(
   summary: string,
   turns: ModelMessage[][],
 ): ModelMessage[] {
+  void systemPrompt; // system prompt is passed via streamText({ system }) in runtime.ts.
   const context: ModelMessage[] = [
-    { role: "system", content: systemPrompt }, // the CURRENT agent's prompt
     { role: "user", content: task }, // the goal is pinned, never summarized away
   ];
   if (summary) {
-    context.push({ role: "system", content: `Summary of earlier work so far:\n${summary}` });
+    context.push({
+      role: "user",
+      content: `Summary of earlier work so far:\n${summary}`,
+    });
   }
   for (const turn of turns) context.push(...turn); // recent turns, verbatim
   return context;
@@ -52,18 +58,18 @@ export async function summarize(
 ): Promise<string> {
   const transcript = oldTurns
     .flat()
-    .map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
+    .map(
+      (m) =>
+        `${m.role}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`,
+    )
     .join("\n")
     .slice(0, 6000);
 
   const { text } = await generateText({
     model,
+    system:
+      "You compress an agent's work log into a short running summary. Preserve concrete facts: item ids, categories, draft ids, amounts, and what was already sent. Be terse.",
     messages: [
-      {
-        role: "system",
-        content:
-          "You compress an agent's work log into a short running summary. Preserve concrete facts: item ids, categories, draft ids, amounts, and what was already sent. Be terse.",
-      },
       {
         role: "user",
         content: `Prior summary:\n${priorSummary || "(none)"}\n\nFold in this newer work:\n${transcript}\n\nReturn the updated summary.`,

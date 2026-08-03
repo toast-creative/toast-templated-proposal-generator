@@ -17,7 +17,11 @@ import {
 const MAX_STEPS = 30;
 
 // Tools that require a human's go-ahead before they run.
-const NEEDS_APPROVAL = new Set(["issueRefund", "createTemplateForUser"]);
+const NEEDS_APPROVAL = new Set([
+  "issueRefund",
+  "createTemplateForUser",
+  "createAndPopulateTemplateForUser",
+]);
 const APPROVAL_TIMEOUT_S = 86_400; // up to a day — a human approval is an unbounded wait
 
 type ToolCall = {
@@ -45,10 +49,16 @@ function looksLikeClarification(text: string): boolean {
 // One model turn over the hydrated context, using the CURRENT agent's tools.
 async function modelTurn(
   workflowId: string,
+  systemPrompt: string,
   context: ModelMessage[],
   agentTools: ToolSet,
 ): Promise<Turn> {
-  const result = streamText({ model, messages: context, tools: agentTools });
+  const result = streamText({
+    model,
+    system: systemPrompt,
+    messages: context,
+    tools: agentTools,
+  });
 
   for await (const part of result.fullStream) {
     if (part.type === "text-delta") {
@@ -80,7 +90,14 @@ async function toolStep(
     name: call.toolName,
     args: call.input,
   });
-  const output = await runTool(call.toolName, call.input);
+  const output = await runTool(call.toolName, call.input, async (message) => {
+    await emit({
+      type: EventType.Log,
+      workflowId,
+      level: "info",
+      message,
+    });
+  });
   await emit({
     type: EventType.ToolCompleted,
     workflowId,
@@ -165,7 +182,13 @@ async function agentWorkflow(input: string): Promise<string> {
       turns,
     );
     const turn = await DBOS.runStep(
-      () => modelTurn(workflowId, context, currentAgent.tools),
+      () =>
+        modelTurn(
+          workflowId,
+          currentAgent.systemPrompt,
+          context,
+          currentAgent.tools,
+        ),
       {
         name: `model-${step}`,
       },

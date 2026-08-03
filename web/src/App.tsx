@@ -16,7 +16,7 @@ export function App() {
       <div className="flex h-full flex-col">
         <header className="flex items-center justify-between border-b px-4 py-2">
           <span className="text-sm font-semibold tracking-tight">
-            Harness<span className="text-muted-foreground"> Inspector</span>
+            Toast<span className="text-muted-foreground"> Proposal AI</span>
           </span>
           <div className="flex items-center gap-3">
             <span
@@ -40,7 +40,11 @@ export function App() {
               onClick={toggle}
               aria-label="Toggle theme"
             >
-              {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+              {theme === "dark" ? (
+                <Sun className="size-4" />
+              ) : (
+                <Moon className="size-4" />
+              )}
             </Button>
           </div>
         </header>

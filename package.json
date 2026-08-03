@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "smoke:create-template-tool": "tsx scripts/smoke-create-template-tool.ts",
+    "smoke:populate-template-tool": "tsx scripts/smoke-create-template-tool.ts populate",
     "docs": "vitepress dev lessons --port 5174",
     "docs:build": "vitepress build lessons",
     "docs:preview": "vitepress preview lessons --port 4174"

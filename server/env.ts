@@ -11,3 +11,5 @@ export const TEMPLATED_COOKIE =
   process.env.TEMPLATED_COOKIE ?? process.env.TEMPLATED_API_COOKIE ?? "";
 export const TEMPLATED_MAIN_TEMPLATE_ID =
   process.env.TEMPLATED_MAIN_TEMPLATE_ID ?? "";
+export const TEMPLATED_EDITOR_BASE_URL =
+  process.env.TEMPLATED_EDITOR_BASE_URL ?? "https://app.templated.io/template";
