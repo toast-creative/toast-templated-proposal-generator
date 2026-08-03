@@ -1399,6 +1399,75 @@ async function upsertTemplatePagesSnapshot(
   );
 }
 
+interface TemplatedRenderEntry {
+  page?: string;
+  name?: string;
+  url?: string;
+  render_url?: string;
+}
+
+// Render the whole template (synchronous) and map each page name to its rendered
+// PNG URL. Templated's render endpoint ignores a per-page argument, so it always
+// renders the full deck; we index the result by page name.
+async function renderTemplatePageImages(
+  templateId: string,
+): Promise<Map<string, string>> {
+  const response = await templatedRequest<unknown>("/render", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ template: templateId, format: "png" }),
+  });
+
+  const entries: TemplatedRenderEntry[] = Array.isArray(response)
+    ? (response as TemplatedRenderEntry[])
+    : (((response as { renders?: unknown }).renders ??
+        (response as { pages?: unknown }).pages ??
+        []) as TemplatedRenderEntry[]);
+
+  const urlByPage = new Map<string, string>();
+  for (const entry of entries) {
+    const pageName = entry.page ?? entry.name;
+    const url = entry.url ?? entry.render_url;
+    if (typeof pageName === "string" && typeof url === "string") {
+      urlByPage.set(pageName, url);
+    }
+  }
+  return urlByPage;
+}
+
+// Rebuild a page as a single full-canvas image layer showing its own rendered
+// PNG. Used to relocate static design pages faithfully: Templated's GET only
+// serializes a SUBSET of a rich page's layers, so recreating one from its GET
+// snapshot drops layers — but its render is pixel-accurate, so flattening keeps
+// the exact appearance (alignment, fonts, copy, backgrounds) intact.
+function buildFlattenedPageSnapshot(
+  pageName: string,
+  imageUrl: string,
+  width: number,
+  height: number,
+): TemplatedPageSnapshot {
+  return {
+    page: pageName,
+    hide: false,
+    width,
+    height,
+    layers: {
+      flattened_page: {
+        layer: "flattened_page",
+        type: "image",
+        image_url: imageUrl,
+        x: 0,
+        y: 0,
+        width,
+        height,
+        object_fit: "cover",
+      },
+    },
+  };
+}
+
 async function reorderPagesBetweenAnchors(
   templateId: string,
   generatedPageNames: string[],
@@ -1479,14 +1548,47 @@ async function reorderPagesBetweenAnchors(
     );
   }
 
-  // Delete the tail (destructive), then recreate each page from its snapshot in
+  // Capture a faithful render of every tail page BEFORE the destructive hide.
+  // These are static design pages (team / testimonials / outro). Templated's
+  // `GET /pages` only serializes a SUBSET of their layers (dense pages with many
+  // duplicated badge/label layers come back with roughly half their layers), and
+  // `hide: true` deletes a page's layers entirely. Recreating such a page from its
+  // GET snapshot therefore drops the un-serialized layers — the exact cause of the
+  // broken team-description / team-core / testimonials pages (missing role labels,
+  // mispositioned badges, dropped background images). A page's rendered PNG is
+  // pixel-accurate, so we flatten each relocated tail page to a single full-canvas
+  // image of its own render. The workflow never edits these pages, so flattening
+  // is lossless for the delivered (rendered) proposal.
+  if (reportProgress) {
+    await reportProgress(
+      `Rendering ${tailPages.length} trailing pages so they survive relocation intact...`,
+    );
+  }
+  const renderByPage = await renderTemplatePageImages(templateId);
+  const missingRenders = tailNames.filter((name) => !renderByPage.get(name));
+  if (missingRenders.length > 0) {
+    throw new Error(
+      `Aborting page reorder to avoid corrupting pages: could not render trailing pages ${missingRenders.join(
+        ", ",
+      )} from template ${templateId}.`,
+    );
+  }
+
+  // Delete the tail (destructive), then recreate each page as a flattened image in
   // original order so they re-append sequentially after the generated block.
   await hideTemplatePages(templateId, tailNames, reportProgress);
 
   for (const page of tailPages) {
-    const recreated = clonePageSnapshot(page, page.page);
-    recreated.hide = false;
-    await upsertTemplatePageSnapshot(templateId, recreated);
+    const imageUrl = renderByPage.get(page.page) as string;
+    const width = typeof page.width === "number" ? page.width : 1920;
+    const height = typeof page.height === "number" ? page.height : 1080;
+    const flattened = buildFlattenedPageSnapshot(
+      page.page,
+      imageUrl,
+      width,
+      height,
+    );
+    await upsertTemplatePageSnapshot(templateId, flattened);
   }
 
   // Verify none of the relocated pages were lost during recreation.
