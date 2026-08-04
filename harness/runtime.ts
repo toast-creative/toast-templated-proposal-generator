@@ -139,40 +139,6 @@ function extractStoryPopulateSummary(
   };
 }
 
-function appendStorySummaryToFinalOutput(
-  baseText: string,
-  storySummary: StoryPopulateSummary | null,
-): string {
-  if (!storySummary) {
-    return baseText;
-  }
-
-  const descriptionList =
-    storySummary.descriptionPages.length > 0
-      ? storySummary.descriptionPages.join(", ")
-      : "None";
-  const masonryList =
-    storySummary.masonryPages.length > 0
-      ? storySummary.masonryPages.join(", ")
-      : "None";
-  const fullList =
-    storySummary.fullPages.length > 0
-      ? storySummary.fullPages.join(", ")
-      : "None";
-
-  const storySection = [
-    "",
-    "Story pages updated as a separate step:",
-    `- Stories created: ${storySummary.storiesCreated}`,
-    `- Pages created: ${storySummary.pagesCreated}`,
-    `- Description pages: ${descriptionList}`,
-    `- Masonry pages: ${masonryList}`,
-    `- Full pages: ${fullList}`,
-  ].join("\n");
-
-  return `${baseText.trimEnd()}\n${storySection}`;
-}
-
 // One model turn over the hydrated context, using the CURRENT agent's tools.
 async function modelTurn(
   workflowId: string,
@@ -353,10 +319,10 @@ async function agentWorkflow(input: string): Promise<string> {
       const turnMessages: ModelMessage[] = [...turn.responseMessages];
 
       if (turn.toolCalls.length === 0) {
-        const finalOutput = appendStorySummaryToFinalOutput(
-          turn.text,
-          storyPopulateSummary,
-        );
+        // Story-page detail is now rendered by the UI's proposal summary card
+        // (built from the tool-completion events), so the final text is just the
+        // model's short confirmation — no appended wall of page names.
+        const finalOutput = turn.text;
 
         await DBOS.runStep(
           () =>

@@ -32,6 +32,12 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  extractProposalSummary,
+  PROPOSAL_TOOL_NAMES,
+  type ProposalSummary,
+} from "@/lib/template";
+import { ProposalSummaryCard } from "./ProposalSummaryCard";
 
 // The left pane is a PROJECTION of the harness event stream. It never talks to
 // the model — it renders whatever events have arrived so far.
@@ -50,6 +56,7 @@ type Turn =
   | { id: string; role: "tool"; part: ToolPart }
   | { id: string; role: "handoff"; from: string; to: string; reason: string }
   | { id: string; role: "supervision"; subagents: Subagent[] }
+  | { id: string; role: "proposal"; summary: ProposalSummary }
   | {
       id: string;
       role: "approval";
@@ -169,6 +176,12 @@ function toTranscript(events: AgentEvent[]): {
   let supervision: Extract<Turn, { role: "supervision" }> | null = null;
   const toolsById = new Map<string, Extract<Turn, { role: "tool" }>>();
   const approvalsById = new Map<string, Extract<Turn, { role: "approval" }>>();
+  // One proposal card per template id: the template step and the later story-pages
+  // step both complete with the same id, so their summaries merge into one card.
+  const proposalsById = new Map<
+    string,
+    Extract<Turn, { role: "proposal" }>
+  >();
   let open = 0;
 
   const sub = (stepId: string) =>
@@ -222,6 +235,29 @@ function toTranscript(events: AgentEvent[]): {
             state: "output-available",
             output: ev.result as Record<string, unknown>,
           };
+        }
+        // Turn a proposal tool's structured result into a human-facing card,
+        // merging into any existing card for the same template.
+        if (turn && PROPOSAL_TOOL_NAMES.includes(turn.part.type)) {
+          const summary = extractProposalSummary(
+            turn.part.type,
+            turn.part.input,
+            ev.result,
+          );
+          if (summary) {
+            const existing = proposalsById.get(summary.templateId);
+            if (existing) {
+              Object.assign(existing.summary, summary);
+            } else {
+              const proposalTurn: Extract<Turn, { role: "proposal" }> = {
+                id: ev.id,
+                role: "proposal",
+                summary,
+              };
+              proposalsById.set(summary.templateId, proposalTurn);
+              turns.push(proposalTurn);
+            }
+          }
         }
         break;
       }
@@ -576,6 +612,8 @@ function TurnView({ turn }: { turn: Turn }) {
           </ChainOfThought>
         </div>
       );
+    case "proposal":
+      return <ProposalSummaryCard summary={turn.summary} />;
     case "approval":
       return <ApprovalCard turn={turn} />;
     case "handoff":

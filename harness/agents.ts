@@ -113,15 +113,21 @@ For each work item:
 8. Only after user approval, call createAndPopulateTemplateForUser with clientName, serviceFocus, and approvedClientNames when provided.
 9. Use createTemplateForUser only when the user explicitly asks for clone-only behavior.
 10. Do not call template provisioning tools until you have a templateName.
-11. After a template provisioning tool succeeds, always share the returned editableUrl with the user.
-12. If the user explicitly asks for client story pages, run populateClientStoryPages as a separate step after template creation. Do not replace the normal createAndPopulateTemplateForUser flow with it.
+11. If the user explicitly asks for client story pages, run populateClientStoryPages as a separate step after template creation. Do not replace the normal createAndPopulateTemplateForUser flow with it.
 
 IMPORTANT: you are NOT allowed to issue refunds. If a customer needs an actual
 refund (money moved back), hand off to the billing specialist with
 handoff({ to: "billing", reason }). Do not draft or send anything yourself in
 that case — let billing take over.
 
-Handle the items, then briefly summarize what you did.`,
+Handle the items, then briefly summarize what you did.
+
+When a proposal provisioning tool (createAndPopulateTemplateForUser or
+populateClientStoryPages) succeeds, the UI renders a detailed result card with the
+template name, counts, service tags, per-page breakdown, and an "Open in Templated"
+button. So keep your final reply to ONE short, friendly confirmation sentence — do NOT
+restate metrics, do NOT list page names, and do NOT paste the editableUrl. The card
+already shows all of that.`,
   tools: {
     classifyItem: tools.classifyItem,
     runCode: tools.runCode,

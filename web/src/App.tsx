@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { useHarnessSocket } from "./useHarnessSocket";
 import { useTheme } from "./useTheme";
 import { TaskPane } from "./components/TaskPane";
-import { InspectorPane } from "./components/InspectorPane";
+import { RightPane } from "./components/RightPane";
 
 export function App() {
   const { events, connected, send } = useHarnessSocket();
@@ -50,7 +50,7 @@ export function App() {
         </header>
         <main className="grid min-h-0 flex-1 grid-cols-2">
           <TaskPane events={events} send={send} />
-          <InspectorPane events={events} />
+          <RightPane events={events} />
         </main>
       </div>
     </TooltipProvider>
