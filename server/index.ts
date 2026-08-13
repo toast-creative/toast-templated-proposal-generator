@@ -3,6 +3,8 @@ import "./env";
 
 import { DBOS } from "@dbos-inc/dbos-sdk";
 import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { ensureSchema, clearEventLog } from "../harness/db";
@@ -63,6 +65,14 @@ async function main() {
     await DBOS.send(String(req.params.workflowId), { approved }, "approval");
     res.json({ ok: true });
   });
+
+  // In production the backend also serves the built inspector (vite build →
+  // web/dist), so the UI, API, and WebSocket all share one origin. This is what
+  // lets the frontend use relative/same-origin URLs and upgrade to wss:// behind
+  // TLS. Registered AFTER the /api routes so it only catches unmatched paths.
+  const webDist = path.resolve(fileURLToPath(import.meta.url), "../../web/dist");
+  app.use(express.static(webDist));
+  app.get(/.*/, (_req, res) => res.sendFile(path.join(webDist, "index.html")));
 
   const server = createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });

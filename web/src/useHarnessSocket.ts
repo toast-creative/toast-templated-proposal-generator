@@ -6,7 +6,11 @@ import { getToken } from "./useAuth";
 // over one WebSocket. We also send commands (submit_task, ...) back over it.
 // The session token rides along as a query param — the server rejects the
 // handshake without a valid one.
-const WS_URL = `ws://${location.hostname}:8787/ws`;
+// Dev: the harness runs on its own port. Production: same-origin as this bundle,
+// so match the page's scheme — wss:// under HTTPS (plain ws:// would be blocked).
+const WS_URL = import.meta.env.DEV
+  ? `ws://${location.hostname}:8787/ws`
+  : `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 
 export function useHarnessSocket(enabled: boolean) {
   const [events, setEvents] = useState<AgentEvent[]>([]);

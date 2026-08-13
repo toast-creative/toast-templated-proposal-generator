@@ -1,0 +1,23 @@
+# Production image: builds the inspector UI and runs the harness server, which
+# serves that built UI + the API + the WebSocket on one origin (port 8787).
+# The dev Dockerfile (used by docker-compose) is separate and unchanged.
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install deps (includes vite + tsx: needed to build the UI and run the server).
+COPY package*.json ./
+RUN npm ci
+
+# Copy the source. data/ (boot-time metadata) is included — not in .dockerignore.
+COPY . .
+
+# Build the inspector UI -> web/dist, which the server serves same-origin.
+RUN npm run build
+
+ENV NODE_ENV=production
+ENV PORT=8787
+
+EXPOSE 8787
+
+CMD ["npx", "tsx", "server/index.ts"]

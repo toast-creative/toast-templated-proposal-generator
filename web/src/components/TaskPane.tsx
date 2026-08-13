@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { TextDotsLoader } from "@/components/ui/loader";
 import { ArrowUp, Eraser, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { authHeader } from "@/useAuth";
+import { API_BASE, authHeader } from "@/useAuth";
 import {
   extractProposalSummary,
   PROPOSAL_TOOL_NAMES,
@@ -333,7 +333,7 @@ export function TaskPane({
 
   async function clearMemory() {
     // The route is wired up in the memory lesson; degrade gracefully before then.
-    await fetch(`http://${location.hostname}:8787/api/clear`, {
+    await fetch(`${API_BASE}/api/clear`, {
       method: "POST",
       headers: { ...authHeader() },
     }).catch(() => {});
@@ -405,7 +405,7 @@ const PROSE = "prose prose-sm dark:prose-invert max-w-none";
 
 function ApprovalCard({ turn }: { turn: Extract<Turn, { role: "approval" }> }) {
   function decide(approved: boolean) {
-    fetch(`http://${location.hostname}:8787/api/approve/${turn.workflowId}`, {
+    fetch(`${API_BASE}/api/approve/${turn.workflowId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify({ approved }),

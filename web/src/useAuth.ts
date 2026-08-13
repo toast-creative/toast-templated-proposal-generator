@@ -5,7 +5,11 @@ import { useState, useCallback } from "react";
 // WebSocket handshake. The password itself never lives in the client bundle.
 const STORAGE_KEY = "toast_proposal_token";
 
-export const API_BASE = `http://${location.hostname}:8787`;
+// In dev the API runs on its own port (8787) alongside the Vite dev server
+// (5173). In production the backend serves this bundle, so the API is same-origin.
+export const API_BASE = import.meta.env.DEV
+  ? `http://${location.hostname}:8787`
+  : "";
 
 export function getToken(): string | null {
   return sessionStorage.getItem(STORAGE_KEY);
