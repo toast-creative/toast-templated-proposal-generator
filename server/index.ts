@@ -8,8 +8,13 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { ensureSchema, clearEventLog } from "../harness/db";
 import { subscribe, history } from "../harness/bus";
 import { runAgentWorkflow } from "../harness/runtime";
-import { runSupervisorWorkflow } from "../harness/supervisor";
 import type { ClientMessage } from "@shared/events";
+import {
+  createSession,
+  isValidSession,
+  requireAuth,
+  verifyPassword,
+} from "./auth";
 
 const PORT = Number(process.env.PORT ?? 8787);
 
@@ -29,24 +34,33 @@ async function main() {
   app.use(express.json());
   app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*"); // inspector runs on a different port
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
   });
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
+  // Master-password login: verify the password and mint a session token.
+  // Everything below /api (and the WebSocket) requires that token.
+  app.post("/api/login", (req, res) => {
+    if (!verifyPassword(req.body?.password)) {
+      return res.status(401).json({ error: "invalid password" });
+    }
+    res.json({ token: createSession() });
+  });
+
   // Clear the durable log. The inspector calls this, then reloads.
-  app.post("/api/clear", async (_req, res) => {
+  app.post("/api/clear", requireAuth, async (_req, res) => {
     await clearEventLog();
     res.json({ ok: true });
   });
 
   // Human-in-the-loop: deliver an approval decision to a suspended workflow.
   // DBOS.send wakes its recv() — even days later, even after a restart.
-  app.post("/api/approve/:workflowId", async (req, res) => {
+  app.post("/api/approve/:workflowId", requireAuth, async (req, res) => {
     const approved = Boolean(req.body?.approved);
-    await DBOS.send(req.params.workflowId, { approved }, "approval");
+    await DBOS.send(String(req.params.workflowId), { approved }, "approval");
     res.json({ ok: true });
   });
 
@@ -61,7 +75,18 @@ async function main() {
     }
   });
 
-  wss.on("connection", async (socket: WebSocket) => {
+  wss.on("connection", async (socket: WebSocket, request) => {
+    // Gate the socket on the same session token. The browser can't set headers
+    // on a WebSocket, so it arrives as a ?token= query param.
+    const token = new URL(
+      request.url ?? "",
+      "http://localhost",
+    ).searchParams.get("token");
+    if (!isValidSession(token)) {
+      socket.close(4401, "unauthorized");
+      return;
+    }
+
     // Register the message handler FIRST — history() is an async DB read, and the
     // client sends as soon as it connects.
     socket.on("message", async (raw) => {
@@ -73,12 +98,7 @@ async function main() {
       }
 
       if (message.type === "submit_task") {
-        // Pick the runtime: the single-agent loop, or the supervisor.
-        const workflow =
-          message.mode === "supervised"
-            ? runSupervisorWorkflow
-            : runAgentWorkflow;
-        await DBOS.startWorkflow(workflow)(message.input);
+        await DBOS.startWorkflow(runAgentWorkflow)(message.input);
       } else if (message.type === "continue_task") {
         await DBOS.send(
           message.workflowId,

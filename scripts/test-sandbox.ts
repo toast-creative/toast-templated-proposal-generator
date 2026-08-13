@@ -2,22 +2,17 @@ import { runInSandbox, type SandboxApi } from "../harness/sandbox";
 
 // Demonstrates the sandbox guardrails directly, without needing the agent to
 // misbehave. Run: npx tsx scripts/test-sandbox.ts
-const api: SandboxApi = {
-  getCharges: async () => [
-    { id: "ch_001", amount: 4900 },
-    { id: "ch_002", amount: 4900 },
-  ],
-};
+const api: SandboxApi = {};
 
 const show = (label: string, r: unknown) => console.log(`\n${label}\n`, JSON.stringify(r));
 
-// 1. Code Mode: fetch + compute via the tools API.
+// 1. Code Mode: run a plain computation and return the result.
 show(
-  "1) code mode (compute over a tool call):",
+  "1) code mode (compute a result):",
   await runInSandbox(
-    `const cs = await tools.getCharges();
-     const dup = cs.find((c, i) => cs.findIndex(x => x.amount === c.amount) !== i);
-     return { duplicateId: dup.id, refund: dup.amount / 100 };`,
+    `const nums = [3, 1, 4, 1, 5, 9, 2, 6];
+     const total = nums.reduce((a, b) => a + b, 0);
+     return { total, max: Math.max(...nums) };`,
     api,
   ),
 );

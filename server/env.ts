@@ -13,3 +13,6 @@ export const TEMPLATED_MAIN_TEMPLATE_ID =
   process.env.TEMPLATED_MAIN_TEMPLATE_ID ?? "";
 export const TEMPLATED_EDITOR_BASE_URL =
   process.env.TEMPLATED_EDITOR_BASE_URL ?? "https://app.templated.io/template";
+
+// Master password that gates the whole app. Override in .dev.vars for real use.
+export const MASTER_PASSWORD = process.env.MASTER_PASSWORD ?? "T0@stMKT";

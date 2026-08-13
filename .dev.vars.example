@@ -9,3 +9,6 @@ DATABASE_URL=postgresql://user:password@host/db?sslmode=require
 TEMPLATED_API_KEY=
 TEMPLATED_MAIN_TEMPLATE_ID=c27db04d-356e-4745-a2dd-e7226f4debdd
 TEMPLATED_API_BASE_URL=https://api.templated.io/v1
+
+# App login. Master password that gates the whole UI (defaults to T0@stMKT).
+MASTER_PASSWORD=T0@stMKT

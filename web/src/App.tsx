@@ -1,15 +1,26 @@
-import { Moon, Sun } from "lucide-react";
+import { LogOut, Moon, Sun } from "lucide-react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useHarnessSocket } from "./useHarnessSocket";
 import { useTheme } from "./useTheme";
+import { useAuth } from "./useAuth";
+import { Login } from "./components/Login";
 import { TaskPane } from "./components/TaskPane";
 import { RightPane } from "./components/RightPane";
 
 export function App() {
-  const { events, connected, send } = useHarnessSocket();
+  const { authed, login, logout } = useAuth();
+  const { events, connected, send } = useHarnessSocket(authed);
   const { theme, toggle } = useTheme();
+
+  if (!authed) {
+    return (
+      <TooltipProvider delayDuration={300}>
+        <Login onSubmit={login} />
+      </TooltipProvider>
+    );
+  }
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -45,6 +56,15 @@ export function App() {
               ) : (
                 <Moon className="size-4" />
               )}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              onClick={logout}
+              aria-label="Log out"
+            >
+              <LogOut className="size-4" />
             </Button>
           </div>
         </header>

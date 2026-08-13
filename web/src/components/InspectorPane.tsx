@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { AgentEvent } from "@shared/events";
 import { cn } from "@/lib/utils";
 
@@ -13,8 +14,30 @@ const groupColor: Record<string, string> = {
 };
 
 export function InspectorPane({ events }: { events: AgentEvent[] }) {
+  const listRef = useRef<HTMLOListElement>(null);
+  const pinnedRef = useRef(true);
+
+  // Track whether the user is scrolled to the bottom. If they've scrolled up to
+  // read older events, don't yank them back down when a new one arrives.
+  function onScroll() {
+    const el = listRef.current;
+    if (!el) return;
+    pinnedRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }
+
+  // Follow the tail as new events stream in — but only while pinned to bottom.
+  useEffect(() => {
+    const el = listRef.current;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+  }, [events.length]);
+
   return (
-    <ol className="h-full min-h-0 overflow-auto p-2 font-mono text-xs">
+    <ol
+      ref={listRef}
+      onScroll={onScroll}
+      className="h-full min-h-0 overflow-auto p-2 font-mono text-xs"
+    >
       {events.length === 0 && (
         <li className="text-muted-foreground p-2">
           Waiting for the harness to emit events…

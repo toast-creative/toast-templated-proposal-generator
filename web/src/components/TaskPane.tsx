@@ -7,13 +7,6 @@ import {
 import { Markdown } from "@/components/ui/markdown";
 import { Tool, type ToolPart } from "@/components/ui/tool";
 import {
-  ChainOfThought,
-  ChainOfThoughtContent,
-  ChainOfThoughtItem,
-  ChainOfThoughtStep,
-  ChainOfThoughtTrigger,
-} from "@/components/ui/chain-of-thought";
-import {
   PromptInput,
   PromptInputAction,
   PromptInputActions,
@@ -21,17 +14,9 @@ import {
 } from "@/components/ui/prompt-input";
 import { Button } from "@/components/ui/button";
 import { TextDotsLoader } from "@/components/ui/loader";
-import {
-  ArrowUp,
-  Circle,
-  CircleCheck,
-  CircleX,
-  Eraser,
-  Loader2,
-  Network,
-  ShieldAlert,
-} from "lucide-react";
+import { ArrowUp, Eraser, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { authHeader } from "@/useAuth";
 import {
   extractProposalSummary,
   PROPOSAL_TOOL_NAMES,
@@ -41,21 +26,10 @@ import { ProposalSummaryCard } from "./ProposalSummaryCard";
 
 // The left pane is a PROJECTION of the harness event stream. It never talks to
 // the model — it renders whatever events have arrived so far.
-type SubagentState = "pending" | "started" | "completed" | "failed";
-type Subagent = {
-  stepId: string;
-  agent: string;
-  objective: string;
-  state: SubagentState;
-  findings: string;
-};
-
 type Turn =
   | { id: string; role: "user"; text: string }
   | { id: string; role: "assistant"; text: string }
   | { id: string; role: "tool"; part: ToolPart }
-  | { id: string; role: "handoff"; from: string; to: string; reason: string }
-  | { id: string; role: "supervision"; subagents: Subagent[] }
   | { id: string; role: "proposal"; summary: ProposalSummary }
   | {
       id: string;
@@ -135,10 +109,6 @@ function getActivity(
         break;
       case EventType.WorkflowCompleted:
       case EventType.WorkflowFailed:
-      case EventType.PlanCreated:
-      case EventType.SubagentStarted:
-      case EventType.SubagentCompleted:
-      case EventType.SubagentFailed:
       case EventType.Log:
         awaitingInput = false;
         break;
@@ -173,7 +143,6 @@ function toTranscript(events: AgentEvent[]): {
 } {
   const turns: Turn[] = [];
   let assistant: Extract<Turn, { role: "assistant" }> | null = null;
-  let supervision: Extract<Turn, { role: "supervision" }> | null = null;
   const toolsById = new Map<string, Extract<Turn, { role: "tool" }>>();
   const approvalsById = new Map<string, Extract<Turn, { role: "approval" }>>();
   // One proposal card per template id: the template step and the later story-pages
@@ -183,9 +152,6 @@ function toTranscript(events: AgentEvent[]): {
     Extract<Turn, { role: "proposal" }>
   >();
   let open = 0;
-
-  const sub = (stepId: string) =>
-    supervision?.subagents.find((s) => s.stepId === stepId);
 
   for (const ev of events) {
     switch (ev.type) {
@@ -271,52 +237,6 @@ function toTranscript(events: AgentEvent[]): {
           };
         break;
       }
-      case EventType.AgentHandoff:
-        assistant = null;
-        turns.push({
-          id: ev.id,
-          role: "handoff",
-          from: ev.from,
-          to: ev.to,
-          reason: ev.reason,
-        });
-        break;
-      case EventType.PlanCreated:
-        assistant = null;
-        supervision = {
-          id: ev.id,
-          role: "supervision",
-          subagents: ev.steps.map((s) => ({
-            stepId: s.id,
-            agent: s.agent,
-            objective: s.objective,
-            state: "pending",
-            findings: "",
-          })),
-        };
-        turns.push(supervision);
-        break;
-      case EventType.SubagentStarted: {
-        const s = sub(ev.stepId);
-        if (s) s.state = "started";
-        break;
-      }
-      case EventType.SubagentCompleted: {
-        const s = sub(ev.stepId);
-        if (s) {
-          s.state = "completed";
-          s.findings = ev.findings;
-        }
-        break;
-      }
-      case EventType.SubagentFailed: {
-        const s = sub(ev.stepId);
-        if (s) {
-          s.state = "failed";
-          s.findings = ev.error;
-        }
-        break;
-      }
       case EventType.ApprovalRequested: {
         assistant = null;
         const turn: Extract<Turn, { role: "approval" }> = {
@@ -358,7 +278,6 @@ export function TaskPane({
   send: (message: ClientMessage) => void;
 }) {
   const [input, setInput] = useState("");
-  const [supervised, setSupervised] = useState(false);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
   const { turns, running } = toTranscript(events);
   const activity = getActivity(events, activeWorkflowId);
@@ -401,13 +320,11 @@ export function TaskPane({
         type: "continue_task",
         workflowId: activeWorkflowId,
         input: text,
-        mode: supervised ? "supervised" : "default",
       });
     } else {
       send({
         type: "submit_task",
         input: text,
-        mode: supervised ? "supervised" : "default",
       });
     }
 
@@ -418,6 +335,7 @@ export function TaskPane({
     // The route is wired up in the memory lesson; degrade gracefully before then.
     await fetch(`http://${location.hostname}:8787/api/clear`, {
       method: "POST",
+      headers: { ...authHeader() },
     }).catch(() => {});
     location.reload(); // simplest reset: reconnect and replay the now-empty log
   }
@@ -465,16 +383,7 @@ export function TaskPane({
             className="dark:bg-transparent"
             placeholder="Give the agent an objective…"
           />
-          <PromptInputActions className="flex items-center justify-between pt-2">
-            <Button
-              type="button"
-              variant={supervised ? "default" : "outline"}
-              size="sm"
-              className="h-8 gap-1.5 rounded-full text-xs"
-              onClick={() => setSupervised((s) => !s)}
-            >
-              <Network className="size-3.5" /> Supervised
-            </Button>
+          <PromptInputActions className="flex items-center justify-end pt-2">
             <PromptInputAction tooltip="Run">
               <Button
                 size="icon"
@@ -498,16 +407,12 @@ function ApprovalCard({ turn }: { turn: Extract<Turn, { role: "approval" }> }) {
   function decide(approved: boolean) {
     fetch(`http://${location.hostname}:8787/api/approve/${turn.workflowId}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify({ approved }),
     }).catch(() => {});
   }
 
-  const args = turn.args as Record<string, unknown> | null;
-  const summary =
-    turn.action === "issueRefund" && args
-      ? `Refund $${((Number(args.amountCents) || 0) / 100).toFixed(2)} to ${String(args.customerId)} (charge ${String(args.chargeId)})`
-      : JSON.stringify(turn.args);
+  const summary = JSON.stringify(turn.args);
 
   return (
     <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
@@ -541,26 +446,6 @@ function ApprovalCard({ turn }: { turn: Extract<Turn, { role: "approval" }> }) {
   );
 }
 
-function subagentIcon(state: SubagentState) {
-  switch (state) {
-    case "pending":
-      return <Circle className="text-muted-foreground/40 size-4" />;
-    case "started":
-      return <Loader2 className="size-4 animate-spin text-sky-500" />;
-    case "completed":
-      return <CircleCheck className="size-4 text-emerald-500" />;
-    case "failed":
-      return <CircleX className="text-destructive size-4" />;
-  }
-}
-
-const SUBAGENT_LABEL: Record<SubagentState, string> = {
-  pending: "queued",
-  started: "investigating…",
-  completed: "done",
-  failed: "failed",
-};
-
 function TurnView({ turn }: { turn: Turn }) {
   switch (turn.role) {
     case "user":
@@ -575,58 +460,10 @@ function TurnView({ turn }: { turn: Turn }) {
       return <Markdown className={PROSE}>{turn.text}</Markdown>;
     case "tool":
       return <Tool toolPart={turn.part} />;
-    case "supervision":
-      return (
-        <div className="space-y-2">
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-            <Network className="size-3.5" /> Supervisor ·{" "}
-            {turn.subagents.length} investigators
-          </div>
-          <ChainOfThought>
-            {turn.subagents.map((s) => (
-              <ChainOfThoughtStep key={s.stepId} defaultOpen>
-                <ChainOfThoughtTrigger leftIcon={subagentIcon(s.state)}>
-                  <span className="font-medium capitalize">{s.agent}</span>
-                  <span className="text-muted-foreground">
-                    {" "}
-                    · {SUBAGENT_LABEL[s.state]}
-                  </span>
-                </ChainOfThoughtTrigger>
-                <ChainOfThoughtContent>
-                  <ChainOfThoughtItem className="italic">
-                    {s.objective}
-                  </ChainOfThoughtItem>
-                  {s.state === "completed" && s.findings && (
-                    <ChainOfThoughtItem className="text-foreground">
-                      <Markdown className={PROSE}>{s.findings}</Markdown>
-                    </ChainOfThoughtItem>
-                  )}
-                  {s.state === "failed" && (
-                    <ChainOfThoughtItem className="text-destructive">
-                      {s.findings}
-                    </ChainOfThoughtItem>
-                  )}
-                </ChainOfThoughtContent>
-              </ChainOfThoughtStep>
-            ))}
-          </ChainOfThought>
-        </div>
-      );
     case "proposal":
       return <ProposalSummaryCard summary={turn.summary} />;
     case "approval":
       return <ApprovalCard turn={turn} />;
-    case "handoff":
-      return (
-        <div className="text-muted-foreground flex items-center gap-2 py-1 text-xs">
-          <div className="bg-border h-px flex-1" />
-          <span className="shrink-0">
-            ↪ handed off <span className="font-medium">{turn.from}</span> →{" "}
-            <span className="text-foreground font-medium">{turn.to}</span>
-          </span>
-          <div className="bg-border h-px flex-1" />
-        </div>
-      );
     case "log":
       return (
         <p

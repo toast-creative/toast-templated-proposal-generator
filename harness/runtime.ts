@@ -5,7 +5,7 @@ import { EventType } from "@shared/events";
 import { emit } from "./bus";
 import { model } from "./model";
 import { runTool } from "./tools";
-import { triageAgent, agents } from "./agents";
+import { triageAgent } from "./agents";
 import {
   buildContext,
   summarize,
@@ -18,7 +18,6 @@ const MAX_STEPS = 30;
 
 // Tools that require a human's go-ahead before they run.
 const NEEDS_APPROVAL = new Set([
-  "issueRefund",
   "createTemplateForUser",
   "createAndPopulateTemplateForUser",
 ]);
@@ -224,15 +223,7 @@ function toolResultMessage(call: ToolCall, value: JSONValue): ModelMessage {
   };
 }
 
-// THE DURABLE AGENT LOOP — now a general RUNTIME that runs any agent.
-//
-// The loop is identical to before, with two additions:
-//   · it runs the CURRENT agent's prompt + tools (start: triage)
-//   · the `handoff` tool isn't executed — the harness intercepts it and SWITCHES
-//     the running agent, keeping the conversation. Control transfers laterally.
-//
-// `currentAgent` is rebuilt deterministically on recovery (the handoff is a
-// consequence of a cached model decision), so this composes with durability.
+// THE DURABLE AGENT LOOP — runs the proposal agent through the durable runtime.
 async function agentWorkflow(input: string): Promise<string> {
   const workflowId = DBOS.workflowID ?? "unknown";
   await DBOS.runStep(
@@ -240,7 +231,7 @@ async function agentWorkflow(input: string): Promise<string> {
     { name: "started" },
   );
 
-  let currentAgent = triageAgent;
+  const currentAgent = triageAgent;
   let storyPopulateInvoked = false;
   let storyPopulateSummary: StoryPopulateSummary | null = null;
   const turns: ModelMessage[][] = [];
@@ -374,30 +365,7 @@ async function agentWorkflow(input: string): Promise<string> {
           continue;
         }
 
-        if (call.toolName === "handoff") {
-          // The harness intercepts handoff: switch the running agent, don't run a tool.
-          const to = String(call.input.to ?? "");
-          const reason = String(call.input.reason ?? "");
-          const from = currentAgent.name;
-          await DBOS.runStep(
-            () =>
-              emit({
-                type: EventType.AgentHandoff,
-                workflowId,
-                from,
-                to,
-                reason,
-              }),
-            { name: `handoff-${call.toolCallId}` },
-          );
-          currentAgent = agents[to] ?? currentAgent;
-          turnMessages.push(
-            toolResultMessage(call, {
-              ok: true,
-              message: `You are now the ${to} specialist. Take over and FINISH the task by calling the tools you need — do the work, don't just acknowledge the handoff.`,
-            }),
-          );
-        } else if (NEEDS_APPROVAL.has(call.toolName)) {
+        if (NEEDS_APPROVAL.has(call.toolName)) {
           // HUMAN-IN-THE-LOOP. Ask, then SUSPEND the (durable) workflow until a
           // human decides. recv() can wait minutes or days — and because the
           // workflow is durable, the process can crash and resume right here.

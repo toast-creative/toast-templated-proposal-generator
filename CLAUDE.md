@@ -4,20 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **one-day workshop course**: "Harness Engineering & Agent Orchestration." It is a
-**systems workshop, not an "agent app" workshop.**
-
 **Core idea:** Across the day we build ONE persistent codebase — a **mini agent runtime (the
 harness)**: the layer that wraps a dumb LLM loop and makes it production-grade. We do **not**
 build a vertical agent. The agent is a deliberately boring, domain-neutral task agent; the
-**harness is the protagonist.** Each lesson adds one capability to the runtime.
+**harness is the protagonist.** Each feature adds one capability to the runtime.
 
 The mantra repeated all day: **agent systems are workflow systems.** The LLM decides the next
 semantic step; the harness owns execution.
 
 ## The spine
 
-Everything builds toward one execution loop. Each lesson fills in one line:
+Everything builds toward one execution loop.
 
 ```ts
 async function runWorkflow(workflowId, input) {
@@ -36,7 +33,7 @@ async function runWorkflow(workflowId, input) {
 ## The scenario (domain-neutral, reused every lesson)
 
 One generic **task packet** — review mixed work items, classify, draft actions, pause before
-external actions. Tools are fake-but-realistic, split into:
+external actions. Tools are split into:
 
 - **Safe** (no approval): `searchKnowledgeBase`, `summarizeDocument`, `classifyItem`, `createDraft`
 - **Dangerous** (require approval in L7): `runCode`, `sendMessage`, `updateRecord`, `createTicket`

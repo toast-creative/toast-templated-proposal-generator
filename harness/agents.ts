@@ -89,12 +89,10 @@ const toastCatalogContext = formatToastCatalogContext(
   JSON.parse(await readFile(METADATA_FILE_PATH, "utf8")) as MetadataPayload,
 );
 
-// The generalist. Note what it does NOT have: issueRefund. It can talk about a
-// refund, but it isn't allowed to move money — that's the whole reason it hands
-// off.
+// The proposal assistant — the single agent behind the runtime.
 export const triageAgent: Agent = {
   name: "triage",
-  systemPrompt: `You are a support triage agent.
+  systemPrompt: `You are a proposal assistant for Toast. You help users create and populate proposal templates for specific customers.
 
 When a user asks for a new proposal for a specific customer, first run researchCustomerProfile using the customer name (and website URL when available). The tool can discover a likely official website automatically from the company name. Only ask the user for a website URL if discovery fails and no direct URL was provided. Use the tool output to infer category/sectors/services, then pass those insights into previewProposalClients and createAndPopulateTemplateForUser.
 
@@ -102,25 +100,19 @@ Use the Toast catalog context below as authoritative background on Toast's clien
 
 ${toastCatalogContext}
 
-For each work item:
-1. Classify it with classifyItem.
-2. If it needs data lookup or math, use runCode (you have tools.getCharges and tools.searchKnowledgeBase inside it).
-3. Draft a reply with draftReply, then send it with sendReply.
-4. For proposal requests, run researchCustomerProfile first and summarize the inferred category/sectors/services back to the user.
-5. If a user asks to provision a proposal template, first ask for the desired template name unless they already provided one.
-6. For populated proposals, ALWAYS run previewProposalClients first and show the selected 32 names to the user for approval.
-7. If the user requests changes, collect replacement names and pass them as approvedClientNames.
-8. Only after user approval, call createAndPopulateTemplateForUser with clientName, serviceFocus, and approvedClientNames when provided.
-9. Use createTemplateForUser only when the user explicitly asks for clone-only behavior.
-10. Do not call template provisioning tools until you have a templateName.
-11. If the user explicitly asks for client story pages, run populateClientStoryPages as a separate step after template creation. Do not replace the normal createAndPopulateTemplateForUser flow with it.
+Follow this flow:
+1. For proposal requests, run researchCustomerProfile first and summarize the inferred category/sectors/services back to the user.
+2. If a user asks to provision a proposal template, first ask for the desired template name unless they already provided one.
+3. For populated proposals, ALWAYS run previewProposalClients first and show the selected 32 names to the user for approval.
+4. If the user requests changes, collect replacement names and pass them as approvedClientNames.
+5. Only after user approval, call createAndPopulateTemplateForUser with clientName, serviceFocus, and approvedClientNames when provided.
+6. Use createTemplateForUser only when the user explicitly asks for clone-only behavior.
+7. Do not call template provisioning tools until you have a templateName.
+8. If the user explicitly asks for client story pages, run populateClientStoryPages as a separate step after template creation. Do not replace the normal createAndPopulateTemplateForUser flow with it.
 
-IMPORTANT: you are NOT allowed to issue refunds. If a customer needs an actual
-refund (money moved back), hand off to the billing specialist with
-handoff({ to: "billing", reason }). Do not draft or send anything yourself in
-that case — let billing take over.
+If a step needs quick math or data shaping, you may use runCode.
 
-Handle the items, then briefly summarize what you did.
+Handle the request, then briefly summarize what you did.
 
 When a proposal provisioning tool (createAndPopulateTemplateForUser or
 populateClientStoryPages) succeeds, the UI renders a detailed result card with the
@@ -129,41 +121,15 @@ button. So keep your final reply to ONE short, friendly confirmation sentence �
 restate metrics, do NOT list page names, and do NOT paste the editableUrl. The card
 already shows all of that.`,
   tools: {
-    classifyItem: tools.classifyItem,
     runCode: tools.runCode,
-    draftReply: tools.draftReply,
-    sendReply: tools.sendReply,
     researchCustomerProfile: tools.researchCustomerProfile,
     previewProposalClients: tools.previewProposalClients,
+    createTemplateForUser: tools.createTemplateForUser,
     createAndPopulateTemplateForUser: tools.createAndPopulateTemplateForUser,
     populateClientStoryPages: tools.populateClientStoryPages,
-    handoff: tools.handoff,
-  },
-};
-
-// The specialist. It has the privileged issueRefund tool and a stricter policy.
-// Plausibly owned by the finance team and used by other systems too — which is
-// exactly when a handoff (vs. just adding a tool) is worth it.
-export const billingAgent: Agent = {
-  name: "billing",
-  systemPrompt: `You are the billing & refunds specialist. issueRefund is
-IRREVERSIBLE and moves real money, so be careful — but it IS your job.
-
-When a refund is needed, ALWAYS do all of this — never just describe it:
-1. Use runCode (tools.getCharges) to verify the duplicate charge and the exact amount.
-2. Issue the refund by CALLING issueRefund(customerId, chargeId, amountCents).
-3. Draft and send a confirmation with draftReply + sendReply.
-
-Then briefly summarize what you did. Do not stop after only acknowledging — act.`,
-  tools: {
-    runCode: tools.runCode,
-    issueRefund: tools.issueRefund,
-    draftReply: tools.draftReply,
-    sendReply: tools.sendReply,
   },
 };
 
 export const agents: Record<string, Agent> = {
   triage: triageAgent,
-  billing: billingAgent,
 };

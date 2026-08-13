@@ -23,13 +23,6 @@ export enum EventType {
   ToolFailed = "tool.failed",
   // memory: old turns compacted into a running summary
   MemoryCompacted = "memory.compacted",
-  // orchestration: control handed from one agent to another
-  AgentHandoff = "agent.handoff",
-  // supervision: the plan, and each parallel sub-agent
-  PlanCreated = "plan.created",
-  SubagentStarted = "subagent.started",
-  SubagentCompleted = "subagent.completed",
-  SubagentFailed = "subagent.failed",
   // human-in-the-loop: a privileged action paused for approval
   ApprovalRequested = "approval.requested",
   ApprovalResolved = "approval.resolved",
@@ -70,39 +63,6 @@ export type EventInput =
       summary: string;
     }
   | {
-      type: EventType.AgentHandoff;
-      workflowId: string;
-      from: string;
-      to: string;
-      reason: string;
-    }
-  | {
-      type: EventType.PlanCreated;
-      workflowId: string;
-      steps: { id: string; agent: string; objective: string }[];
-    }
-  | {
-      type: EventType.SubagentStarted;
-      workflowId: string;
-      stepId: string;
-      agent: string;
-      objective: string;
-    }
-  | {
-      type: EventType.SubagentCompleted;
-      workflowId: string;
-      stepId: string;
-      agent: string;
-      findings: string;
-    }
-  | {
-      type: EventType.SubagentFailed;
-      workflowId: string;
-      stepId: string;
-      agent: string;
-      error: string;
-    }
-  | {
       type: EventType.ApprovalRequested;
       workflowId: string;
       toolCallId: string;
@@ -129,16 +89,13 @@ export type AgentEvent = EventInput & { id: string; ts: number };
 export type Emit = (event: EventInput) => void;
 
 // Messages the browser sends back to the server (over the same socket).
-// `mode` picks the runtime: the single-agent loop (default) or the supervisor.
 export type ClientMessage =
   | {
       type: "submit_task";
       input: string;
-      mode?: "default" | "supervised";
     }
   | {
       type: "continue_task";
       workflowId: string;
       input: string;
-      mode?: "default" | "supervised";
     };
