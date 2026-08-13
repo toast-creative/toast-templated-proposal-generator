@@ -8,9 +8,18 @@ if (!connectionString) {
   throw new Error("DATABASE_URL is not set — copy .dev.vars.example to .dev.vars.");
 }
 
-// postgres.js connection (Neon requires SSL, carried in the URL). We keep the
-// pool small — this is the durable event log, not a high-traffic app DB.
-const client = postgres(connectionString, { max: 5 });
+// postgres.js connection. Managed Postgres (RDS/Neon) requires SSL but presents
+// a CA that isn't in Node's trust store, so when the URL asks for SSL we pass an
+// explicit ssl object: encrypted, but without CA verification. This also lets a
+// single DATABASE_URL work for both drivers — the pg driver DBOS uses needs
+// sslmode=no-verify in the URL, and postgres.js's ssl object overrides that. For
+// local dev (docker-compose uses sslmode=disable) we leave SSL off entirely.
+// We keep the pool small — this is the durable event log, not a high-traffic DB.
+const wantsSsl = /[?&]sslmode=(?!disable)/.test(connectionString);
+const client = postgres(connectionString, {
+  max: 5,
+  ...(wantsSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+});
 export const db = drizzle(client);
 
 // The DURABLE event log. In Lesson 1 the event stream lived in a memory array
