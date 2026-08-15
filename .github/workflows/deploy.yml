@@ -1,0 +1,89 @@
+name: Deploy to AWS
+
+# Every push to main ships to the Toast AWS account (ECS Fargate behind
+# CloudFront). Auth is via OIDC — no long-lived AWS keys live in GitHub.
+# One-time setup lives in deploy/bootstrap-oidc.sh; it prints the role ARN
+# to store as the repo variable AWS_DEPLOY_ROLE_ARN.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Queue overlapping pushes instead of racing two deploys onto one service.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+permissions:
+  id-token: write   # required to request the OIDC token
+  contents: read
+
+env:
+  AWS_REGION: ap-southeast-2
+  ECR_REPOSITORY: toast-proposal-demo
+  ECS_CLUSTER: toast-proposal-demo
+  ECS_SERVICE: toast-proposal-demo
+  ECS_TASK_FAMILY: toast-proposal-demo
+  CONTAINER_NAME: app
+  CLOUDFRONT_DISTRIBUTION_ID: E2L98N6EXLVO2K
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY"
+          docker build -f Dockerfile.prod \
+            -t "$IMAGE_URI:${{ github.sha }}" \
+            -t "$IMAGE_URI:latest" .
+          docker push "$IMAGE_URI:${{ github.sha }}"
+          docker push "$IMAGE_URI:latest"
+          echo "image=$IMAGE_URI:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      # Pull the live task definition and use it as the base, so the existing
+      # secrets / env / roles are preserved — we only swap the image tag.
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$ECS_TASK_FAMILY" \
+            --query 'taskDefinition' \
+            --output json > task-definition.json
+
+      - name: Render new task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build.outputs.image }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*"
