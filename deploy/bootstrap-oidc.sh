@@ -66,8 +66,10 @@ TRUST_POLICY="$(cat <<JSON
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
-          "${OIDC_HOST}:aud": "sts.amazonaws.com",
-          "${OIDC_HOST}:sub": "repo:${GH_REPO}:ref:refs/heads/${GH_BRANCH}"
+          "${OIDC_HOST}:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "${OIDC_HOST}:sub": "repo:${GH_REPO}:*"
         }
       }
     }
