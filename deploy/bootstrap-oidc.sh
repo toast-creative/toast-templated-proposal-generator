@@ -22,6 +22,15 @@ REGION="ap-southeast-2"
 GH_REPO="toast-creative/toast-templated-proposal-generator"
 GH_BRANCH="main"
 
+# GitHub OIDC subject claim. This org has GitHub's *immutable subject claim*
+# enabled, so the `sub` embeds numeric owner/repo IDs:
+#   repo:<owner>@<owner_id>/<repo>@<repo_id>:<ref...>
+# We trust BOTH that form and the classic `repo:<owner>/<repo>:...` form so the
+# role keeps working whether or not immutable subjects are on. Re-derive the
+# immutable prefix with:
+#   gh api /repos/${GH_REPO}/actions/oidc/customization/sub  ->  .sub_claim_prefix
+GH_SUB_IMMUTABLE="repo:toast-creative@292269961/toast-templated-proposal-generator@1332703028"
+
 ROLE_NAME="toast-proposal-demo-gha-deploy"
 POLICY_NAME="toast-proposal-demo-gha-deploy-policy"
 ECR_REPO="toast-proposal-demo"
@@ -66,8 +75,13 @@ TRUST_POLICY="$(cat <<JSON
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
-          "${OIDC_HOST}:aud": "sts.amazonaws.com",
-          "${OIDC_HOST}:sub": "repo:${GH_REPO}:ref:refs/heads/${GH_BRANCH}"
+          "${OIDC_HOST}:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "${OIDC_HOST}:sub": [
+            "${GH_SUB_IMMUTABLE}:*",
+            "repo:${GH_REPO}:*"
+          ]
         }
       }
     }
