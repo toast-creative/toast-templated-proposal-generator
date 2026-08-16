@@ -102,4 +102,27 @@ You build the real (brittle) agent loop in Lesson 1.
 - **Notes:** VitePress.
 - Libraries for durable execution, sandboxing, and state are introduced per lesson.
 
-Everything runs locally. No deployment needed.
+The course itself runs locally. A production build is also deployed to AWS (see below).
+
+## Deployment
+
+The app is deployed to the Toast AWS account and lives at
+**https://d2o1hivak53qa.cloudfront.net/** (CloudFront → ALB → ECS Fargate, region
+`ap-southeast-2`).
+
+**Every push to `main` auto-deploys** via `.github/workflows/deploy.yml`: it builds
+`Dockerfile.prod`, pushes the image to ECR (tagged with the commit SHA plus `latest`), registers a
+new ECS task-definition revision, rolls the service, and invalidates the CloudFront cache. GitHub
+authenticates to AWS with **OIDC** — no AWS keys are stored in GitHub.
+
+**One-time setup** (run once by someone with IAM admin on the Toast account):
+
+```bash
+AWS_PROFILE=toast ./deploy/bootstrap-oidc.sh
+# then store the printed role ARN as a repo Actions variable:
+gh variable set AWS_DEPLOY_ROLE_ARN --body "<role-arn-from-script>"
+```
+
+**Runtime secrets** (`DATABASE_URL`, `ANTHROPIC_API_KEY`, `TEMPLATED_API_KEY`, `MASTER_PASSWORD`)
+live in AWS Secrets Manager under `toast-proposal-demo/env` and are injected into the task at
+runtime. They are managed directly in Secrets Manager, **not** through CI.

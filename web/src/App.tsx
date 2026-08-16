@@ -27,7 +27,7 @@ export function App() {
       <div className="flex h-full flex-col">
         <header className="flex items-center justify-between border-b px-4 py-2">
           <span className="text-sm font-semibold tracking-tight">
-            Toast<span className="text-muted-foreground"> Proposal AI</span>
+            Toast<span className="text-muted-foreground"> Proposal AI MVP</span>
           </span>
           <div className="flex items-center gap-3">
             <span

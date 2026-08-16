@@ -36,7 +36,7 @@ export function Login({
             <Lock className="size-5 text-primary" />
           </div>
           <h1 className="text-lg font-semibold tracking-tight">
-            Toast<span className="text-muted-foreground"> Proposal AI</span>
+            Toast<span className="text-muted-foreground"> Proposal AI MVP</span>
           </h1>
           <p className="text-sm text-muted-foreground">
             Enter the master password to continue.
